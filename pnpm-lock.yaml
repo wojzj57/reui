@@ -12,6 +12,25 @@ importers:
         specifier: ^5.6.3
         version: 5.9.3
 
+  workspace/cli:
+    dependencies:
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^20.16.13
+        version: 20.19.41
+      '@vitest/coverage-v8':
+        specifier: ^2.1.4
+        version: 2.1.9(vitest@2.1.9(@types/node@20.19.41)(jsdom@25.0.1))
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.4
+        version: 2.1.9(@types/node@20.19.41)(jsdom@25.0.1)
+
   workspace/core:
     dependencies:
       '@reui/interface':

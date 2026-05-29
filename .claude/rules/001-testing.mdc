@@ -1,0 +1,109 @@
+---
+# Please note: Do not modify the header of this document. If modified, CodeBuddy (Internal Edition) will apply the default logic settings.
+alwaysApply: true
+---
+## 测试与 CI
+
+适用范围：`workspace/` 下所有 TypeScript 包（`@reui/core` / `@reui/framework` / `@reui/cli` / `@reui/interface` / `runtime`）
+
+### 测试框架与组织策略
+
+**TypeScript 测试框架**：
+- **测试运行器**：**Vitest**（与 Vite 同源，原生 ESM/TS）
+  - 不使用 Jest、不使用 happy-dom
+- **DOM 环境**：`jsdom`（`environment: 'jsdom'`）
+- **断言**：Vitest 内置 `expect`
+- **Mock**：Vitest 内置 `vi.fn` / `vi.useFakeTimers`，全部用 fake timers 控制超时与心跳
+- **协议契约**：**Zod**，schema 集中放在 `workspace/interface/src/protocol/`（Runtime 与 Core 共享真相源，协议变更必须先改 `interface/`）
+- **类型测试**：Vitest `expectTypeOf`
+- **覆盖率**：Vitest + `@vitest/coverage-v8`
+- **体积守护**：`size-limit + @size-limit/preset-small-lib`（`@reui/core` ≤ 10KB gzip）
+
+**测试目录结构**（每个 workspace 包独立维护）：
+
+```
+workspace/<pkg>/
+├── src/
+└── tests/
+    ├── unit/             单元测试，文件名与 src 镜像
+    ├── integration/      集成测试（端到端验证调用全链路）
+    ├── contract/         协议契约测试（消费 @reui/interface 的 Zod schema）
+    ├── types/            类型测试（*.test-d.ts，使用 expectTypeOf）
+    ├── helpers/          测试工具：mock-runtime / iframe-window / factories / matchers / flush-promises
+    └── setup.ts          全局 setup（注册 matchers / polyfill）
+```
+
+**约定**：
+- 测试文件后缀：行为测试 `.test.ts`，类型测试 `.test-d.ts`
+- `tests/` 与 `src/` 镜像目录结构
+- **避免把单元测试内联到 `src/` 代码中**，独立放到每个包的 `tests/` 目录
+- 测试中所有外部时序（超时、心跳）一律使用 `vi.useFakeTimers()`，**禁止真实 `setTimeout` 等待**
+
+### 测试规范（Conventions）
+
+**1. 命名**：
+- `describe('<被测对象>.<行为域>', ...)`，例如 `Client.handshake` / `event.on`
+- `it('should <expected behavior> when <condition>', ...)`
+- 反例条件放 `when ...`，不要混进正常路径用例
+
+**2. AAA 模式（强制）**：每个用例严格三段 `// arrange` → `// act` → `// assert`，**禁止把断言穿插到 act 阶段**
+
+**3. 时序**：
+- 任何超时类断言一律 fake timers：`vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })`
+- 推进时间使用 `await vi.advanceTimersByTimeAsync(ms)`
+- **禁止使用 `vi.runAllTimers()`**
+
+**4. 断言粒度**：对协议消息的断言要使用 **schema + 字段子集**，不要做整对象 `toEqual`：
+```ts
+expect(runtime.received).toContainMessageMatching({
+  type: 'reui:request',
+  method: 'http:request',
+  params: { method: 'GET', url: '/api/x' },
+});
+```
+
+**5. 一个用例一个意图**：不允许在一个 `it` 里测多个 method；不允许在 `beforeEach` 里写断言；`beforeEach` 只做 arrange
+
+**6. 不可使用**：
+- ❌ `setTimeout(..., 0)` + `await new Promise(r => setTimeout(r, 50))`：换 `await flushPromises()` 或 `vi.advanceTimersByTimeAsync`
+- ❌ 真实 `fetch` / 真实 `WebSocket`：所有网络都通过 Runtime 代理，测试里 mock Runtime 的响应，**不是 fetch**
+- ❌ `as any` 跳过类型：测试也要类型安全；私有字段用 `vi.spyOn` 或 `__internal` 命名空间
+- ❌ 在用例里硬编码协议消息字面量：所有协议消息必须经 `tests/helpers/factories.ts` 中的工厂函数构造
+
+### 覆盖率门槛
+
+| 指标 | 阈值 |
+|---|---|
+| Statements | **≥ 90%** |
+| Branches | **≥ 90%** |
+| Functions | **≥ 90%** |
+| Lines | **≥ 90%** |
+
+未达阈值 CI 直接红。`vitest.config.ts` 中通过 `coverage.thresholds` 落地，排除 `src/index.ts` / `src/types.ts`（纯 re-export 与类型声明）。
+
+### CI/CD 配置
+
+**PR 流水线（每个 PR 必跑）**：
+```yaml
+- pnpm install --frozen-lockfile
+- pnpm -F <pkg> typecheck
+- pnpm -F <pkg> lint
+- pnpm -F <pkg> test --coverage
+- pnpm -F <pkg> build
+- pnpm -F @reui/core size                  # size-limit，仅 core
+```
+
+**`package.json` scripts（建议每个包统一）**：
+```jsonc
+{
+  "scripts": {
+    "test":       "vitest run",
+    "test:watch": "vitest",
+    "test:cov":   "vitest run --coverage",
+    "test:types": "vitest run --typecheck.only",
+    "size":       "size-limit",
+    "lint":       "eslint src tests --max-warnings=0",
+    "typecheck":  "tsc -p tsconfig.json --noEmit"
+  }
+}
+```

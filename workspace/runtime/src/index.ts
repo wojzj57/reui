@@ -17,6 +17,14 @@ export type { NuiBridgeMode } from './nui-bridge';
 export { HeartbeatMonitor } from './heartbeat-monitor';
 export type { HeartbeatTarget } from './heartbeat-monitor';
 
+export { PluginManager } from './plugin-manager';
+export type {
+  PluginInstance,
+  PluginManifestMinimal,
+  PluginState,
+  PluginManagerOptions,
+} from './plugin-manager';
+
 export {
   KNOWN_NAMESPACES,
   parseEventName,

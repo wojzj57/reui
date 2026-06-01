@@ -195,9 +195,6 @@ export type PluginManifest = z.infer<typeof PluginManifestSchema>;
 /** Inferred TypeScript type for layer / display-type values */
 export type DisplayType = z.infer<typeof LayerEnum>;
 
-/** @deprecated Use `DisplayType` instead. */
-export type Layer = DisplayType;
-
 /** Inferred TypeScript type for display position values */
 export type Position = z.infer<typeof PositionEnum>;
 

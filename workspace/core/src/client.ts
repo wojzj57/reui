@@ -16,7 +16,6 @@
 
 import {
   PROTOCOL_VERSION,
-  type ErrorCode,
   type HandshakeAckMessage,
   type HandshakeRejectMessage,
   type PingMessage,
@@ -429,8 +428,8 @@ export class Client {
   private handleReject(msg: HandshakeRejectMessage): void {
     if (this.state !== 'connecting') return;
     const { code, reason } = msg.payload;
-    // RFC-001 §3.6：握手 reject 携带的 code 必为 ErrorCode 子集。
-    this.failHandshake(new ReUIError(code as ErrorCode, 'handshake', reason));
+    // RFC-001 §3.6：HandshakeRejectCode 是 ErrorCode 的字面量子集，可直接赋值。
+    this.failHandshake(new ReUIError(code, 'handshake', reason));
   }
 
   private handleResponse(msg: ResponseMessage): void {

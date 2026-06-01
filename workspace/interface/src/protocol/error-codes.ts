@@ -18,6 +18,7 @@ export const ERROR_CODES = [
   'EVENT_DENIED',
   'HANDSHAKE_REJECTED',
   'UNKNOWN_PLUGIN',
+  'PAYLOAD_TOO_LARGE',
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

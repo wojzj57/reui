@@ -25,6 +25,12 @@ export type {
   PluginManagerOptions,
 } from './plugin-manager';
 
+export { MessageDispatcher } from './message-dispatcher';
+export type {
+  MessageDispatcherRouterLike,
+  MessageDispatcherOptions,
+} from './message-dispatcher';
+
 export {
   KNOWN_NAMESPACES,
   parseEventName,

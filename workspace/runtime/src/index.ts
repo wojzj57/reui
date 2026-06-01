@@ -11,6 +11,9 @@ export type { EventHandler, Unsubscribe as EventBusUnsubscribe } from './event-b
 export { AuthService } from './auth-service';
 export type { UserInfo, Unsubscribe as AuthUnsubscribe } from './auth-service';
 
+export { NuiBridge } from './nui-bridge';
+export type { NuiBridgeMode } from './nui-bridge';
+
 export {
   KNOWN_NAMESPACES,
   parseEventName,

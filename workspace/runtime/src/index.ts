@@ -17,12 +17,15 @@ export type { NuiBridgeMode } from './nui-bridge';
 export { HeartbeatMonitor } from './heartbeat-monitor';
 export type { HeartbeatTarget } from './heartbeat-monitor';
 
-export { PluginManager } from './plugin-manager';
+export { PluginManager, PluginManagerError } from './plugin-manager';
 export type {
   PluginInstance,
   PluginManifestMinimal,
   PluginState,
   PluginManagerOptions,
+  PluginManagerErrorCode,
+  ManifestValidator,
+  PluginStateStorage,
 } from './plugin-manager';
 
 export { MessageDispatcher } from './message-dispatcher';

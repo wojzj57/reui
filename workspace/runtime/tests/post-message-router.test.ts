@@ -21,9 +21,11 @@ import { PROTOCOL_VERSION } from '@reui/interface';
 import { AuthService } from '../src/auth-service';
 import { EventBus } from '../src/event-bus';
 import { HeartbeatMonitor } from '../src/heartbeat-monitor';
+import { LayerSystem } from '../src/layer-system';
 import { NuiBridge } from '../src/nui-bridge';
 import {
   PluginManager,
+  PluginManagerError,
   type PluginInstance,
   type PluginManifestMinimal,
 } from '../src/plugin-manager';
@@ -76,9 +78,9 @@ interface LoadedPlugin {
   lastMessage: () => CapturedMessage;
 }
 
-const loadPlugin = (
+const loadPlugin = async (
   overrides: Partial<PluginManifestMinimal> = {},
-): LoadedPlugin => {
+): Promise<LoadedPlugin> => {
   const stub = makeStubIframe();
   iframeQueue.push(stub.iframe);
   // 必须先用 stub iframeFactory 拉起 PluginManager 单例。`beforeEach` 已经
@@ -93,7 +95,7 @@ const loadPlugin = (
       ? { permissions: overrides.permissions }
       : {}),
   };
-  const plugin = manager.loadPlugin(manifest);
+  const plugin = await manager.loadPlugin(manifest);
   const outbox = (): CapturedMessage[] => {
     const calls = stub.fakeWindow.postMessage.mock.calls;
     const out: CapturedMessage[] = [];
@@ -157,6 +159,7 @@ beforeEach(() => {
   AuthService.__resetForTests();
   NuiBridge.__resetForTests();
   HeartbeatMonitor.__resetForTests();
+  LayerSystem.__resetForTests();
   PluginManager.__resetForTests();
   PostMessageRouter.__resetForTests();
   // 先把 PluginManager 单例用 stub iframeFactory 拉起，确保后续
@@ -167,6 +170,7 @@ beforeEach(() => {
 afterEach(() => {
   PostMessageRouter.__resetForTests();
   PluginManager.__resetForTests();
+  LayerSystem.__resetForTests();
   HeartbeatMonitor.__resetForTests();
   NuiBridge.__resetForTests();
   AuthService.__resetForTests();
@@ -178,10 +182,10 @@ afterEach(() => {
 // ── 1. handshake 路径 ───────────────────────────────────────────────────
 
 describe('PostMessageRouter.handshake', () => {
-  it('should mark plugin ready and reply handshake-ack with non-empty runtimeOrigin when handshake is valid', () => {
+  it('should mark plugin ready and reply handshake-ack with non-empty runtimeOrigin when handshake is valid', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
     const markReady = vi.spyOn(PluginManager.getInstance(), 'markReady');
 
     // act
@@ -201,10 +205,10 @@ describe('PostMessageRouter.handshake', () => {
     expect(runtimeOrigin).not.toBe('');
   });
 
-  it('should reply handshake-reject UNKNOWN_PLUGIN and not mark ready when handshake.pluginId differs from registered id', () => {
+  it('should reply handshake-reject UNKNOWN_PLUGIN and not mark ready when handshake.pluginId differs from registered id', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
     const markReady = vi.spyOn(PluginManager.getInstance(), 'markReady');
 
     // act
@@ -217,10 +221,10 @@ describe('PostMessageRouter.handshake', () => {
     expect(markReady).not.toHaveBeenCalled();
   });
 
-  it('should reply handshake-reject VERSION_MISMATCH when raw handshake carries a different protocol version', () => {
+  it('should reply handshake-reject VERSION_MISMATCH when raw handshake carries a different protocol version', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(plugin, makeHandshake('plugin-a', 999));
@@ -238,7 +242,7 @@ describe('PostMessageRouter.request', () => {
   it('should reply success response with the handler result and pass through the request id when method is registered', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
     router.registerHandler('demo:echo', ({ params }) => ({ echoed: params }));
 
     // act
@@ -258,7 +262,7 @@ describe('PostMessageRouter.request', () => {
   it('should reply METHOD_NOT_FOUND when the requested method is not registered', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(plugin, makeRequest('req-2', 'unknown:method'));
@@ -276,7 +280,7 @@ describe('PostMessageRouter.request', () => {
   it('should reply CAPABILITY_DENIED when the registered method requires a capability the plugin does not declare', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({
+    const { plugin, lastMessage } = await loadPlugin({
       id: 'plugin-a',
       permissions: [],
     });
@@ -298,7 +302,7 @@ describe('PostMessageRouter.request', () => {
   it('should invoke the handler and reply success when the plugin declares the required capability', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({
+    const { plugin, lastMessage } = await loadPlugin({
       id: 'plugin-a',
       permissions: ['secure.write'],
     });
@@ -322,7 +326,7 @@ describe('PostMessageRouter.request', () => {
   it('should propagate code/message from a handler error that carries a known ErrorCode', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
     router.registerHandler('demo:fail', () => {
       const err = Object.assign(new Error('quota exceeded'), {
         code: 'PAYLOAD_TOO_LARGE' as const,
@@ -346,7 +350,7 @@ describe('PostMessageRouter.request', () => {
   it('should reply RUNTIME_ERROR with the original message when a plain Error is thrown by the handler', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
     router.registerHandler('demo:boom', () => {
       throw new Error('nope');
     });
@@ -364,10 +368,10 @@ describe('PostMessageRouter.request', () => {
     });
   });
 
-  it('should reply VERSION_MISMATCH with details.expected and details.got when a request carries a wrong protocol version', () => {
+  it('should reply VERSION_MISMATCH with details.expected and details.got when a request carries a wrong protocol version', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(plugin, makeRequest('req-7', 'anything', undefined, 999));
@@ -391,7 +395,7 @@ describe('PostMessageRouter.notify', () => {
   it('should invoke the handler but never send a response back to the plugin when message type is reui:notify', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, fakeWindow } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, fakeWindow } = await loadPlugin({ id: 'plugin-a' });
     const handler = vi.fn(() => undefined);
     router.registerHandler('demo:fire', handler);
 
@@ -407,7 +411,7 @@ describe('PostMessageRouter.notify', () => {
   it('should emit router:error and not send a response when a notify handler throws', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, fakeWindow } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, fakeWindow } = await loadPlugin({ id: 'plugin-a' });
     const errorEvents = vi.fn();
     EventBus.getInstance().on('router:error', errorEvents);
     router.registerHandler('demo:bad', () => {
@@ -427,10 +431,10 @@ describe('PostMessageRouter.notify', () => {
 // ── 4. pong 路径 ────────────────────────────────────────────────────────
 
 describe('PostMessageRouter.pong', () => {
-  it('should forward pong to heartbeat.handlePong with the plugin id when receiving reui:pong', () => {
+  it('should forward pong to heartbeat.handlePong with the plugin id when receiving reui:pong', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin } = loadPlugin({ id: 'plugin-a' });
+    const { plugin } = await loadPlugin({ id: 'plugin-a' });
     const handlePong = vi.spyOn(HeartbeatMonitor.getInstance(), 'handlePong');
 
     // act
@@ -453,7 +457,7 @@ describe('PostMessageRouter event subscription', () => {
   it('should push reui:push to the plugin when a subscribed event is emitted on the EventBus', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, outbox } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, outbox } = await loadPlugin({ id: 'plugin-a' });
     router.handlePluginMessage(
       plugin,
       makeRequest('sub-1', 'event:subscribe', { event: 'plugin:hello' }),
@@ -476,7 +480,7 @@ describe('PostMessageRouter event subscription', () => {
   it('should stop pushing further events to the plugin once event:unsubscribe is processed', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, outbox } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, outbox } = await loadPlugin({ id: 'plugin-a' });
     router.handlePluginMessage(
       plugin,
       makeRequest('sub-1', 'event:subscribe', { event: 'plugin:hello' }),
@@ -498,7 +502,7 @@ describe('PostMessageRouter event subscription', () => {
   it('should auto-clean all subscriptions for a plugin when PluginManager.unloadPlugin emits plugin:unloaded', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, outbox } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, outbox } = await loadPlugin({ id: 'plugin-a' });
     router.handlePluginMessage(
       plugin,
       makeRequest('sub-1', 'event:subscribe', { event: 'plugin:hello' }),
@@ -520,7 +524,7 @@ describe('PostMessageRouter built-in methods', () => {
   it('should reply with the AuthService.getUser() result when the plugin requests auth:getUser', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
     AuthService.getInstance().updateUser({
       id: 'u-1',
       name: 'tester',
@@ -543,7 +547,7 @@ describe('PostMessageRouter built-in methods', () => {
   it('should reply CAPABILITY_DENIED for nui:send when the plugin lacks runtime.message and otherwise call NuiBridge.sendToGame', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({
+    const { plugin, lastMessage } = await loadPlugin({
       id: 'plugin-a',
       permissions: [],
     });
@@ -571,7 +575,7 @@ describe('PostMessageRouter built-in methods', () => {
   it('should call NuiBridge.sendToGame with the event name and data when the plugin declares runtime.message and requests nui:send', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({
+    const { plugin, lastMessage } = await loadPlugin({
       id: 'plugin-a',
       permissions: ['runtime.message'],
     });
@@ -601,7 +605,7 @@ describe('PostMessageRouter built-in methods', () => {
   it('should call PluginManager.showPlugin when the plugin declares plugin.self.visibility and requests plugin:show', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin } = loadPlugin({
+    const { plugin } = await loadPlugin({
       id: 'plugin-a',
       permissions: ['plugin.self.visibility'],
     });
@@ -618,7 +622,7 @@ describe('PostMessageRouter built-in methods', () => {
   it('should reply INVALID_PARAMS when auth:hasPermission is called without a permission field', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(
@@ -643,7 +647,7 @@ describe('PostMessageRouter.unregisterHandler', () => {
   it('should reply METHOD_NOT_FOUND once a previously registered method is unregistered', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
     router.registerHandler('demo:once', () => 'first');
     router.unregisterHandler('demo:once');
 
@@ -662,10 +666,10 @@ describe('PostMessageRouter.unregisterHandler', () => {
 });
 
 describe('PostMessageRouter unrecognized envelopes', () => {
-  it('should silently drop a message when its envelope fails Zod validation', () => {
+  it('should silently drop a message when its envelope fails Zod validation', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, fakeWindow } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, fakeWindow } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(plugin, { type: 'reui:request' /* missing id/method/version */ });
@@ -674,10 +678,10 @@ describe('PostMessageRouter unrecognized envelopes', () => {
     expect(fakeWindow.postMessage).not.toHaveBeenCalled();
   });
 
-  it('should silently drop a well-formed reui message whose type is not a plugin-originated one (e.g. reui:response)', () => {
+  it('should silently drop a well-formed reui message whose type is not a plugin-originated one (e.g. reui:response)', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, fakeWindow } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, fakeWindow } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(plugin, {
@@ -697,7 +701,7 @@ describe('PostMessageRouter additional built-ins', () => {
   it('should call AuthService.hasAllPermissions and reply with the boolean when auth:checkPermissions params include a string array', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
     AuthService.getInstance().updatePermissions(['x', 'y']);
 
     // act
@@ -719,7 +723,7 @@ describe('PostMessageRouter additional built-ins', () => {
   it('should reply INVALID_PARAMS for auth:checkPermissions when the permissions field is not an array of strings', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(
@@ -739,7 +743,7 @@ describe('PostMessageRouter additional built-ins', () => {
   it('should return the current AuthService.getRoles() snapshot when auth:getRoles is invoked', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
     AuthService.getInstance().updateRoles(['admin', 'staff']);
 
     // act
@@ -757,7 +761,7 @@ describe('PostMessageRouter additional built-ins', () => {
   it('should emit on the EventBus when event:emit is invoked by a plugin that declares events.emit', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin } = loadPlugin({
+    const { plugin } = await loadPlugin({
       id: 'plugin-a',
       permissions: ['events.emit'],
     });
@@ -781,7 +785,7 @@ describe('PostMessageRouter additional built-ins', () => {
   it('should reply INVALID_PARAMS for event:subscribe when event field is missing', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(plugin, makeRequest('req-sub-bad', 'event:subscribe', {}));
@@ -798,7 +802,7 @@ describe('PostMessageRouter additional built-ins', () => {
   it('should reply INVALID_PARAMS when event:subscribe is given an event name with an unknown namespace', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(
@@ -818,7 +822,7 @@ describe('PostMessageRouter additional built-ins', () => {
   it('should be idempotent when event:subscribe is called twice for the same event so a single emit only produces one push', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, outbox } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, outbox } = await loadPlugin({ id: 'plugin-a' });
     router.handlePluginMessage(
       plugin,
       makeRequest('s1', 'event:subscribe', { event: 'plugin:dup' }),
@@ -839,7 +843,7 @@ describe('PostMessageRouter additional built-ins', () => {
   it('should silently no-op when event:unsubscribe targets an event the plugin never subscribed to', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(
@@ -855,7 +859,7 @@ describe('PostMessageRouter additional built-ins', () => {
   it('should reply with the plugin manifest when plugin:getConfig is invoked', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({
+    const { plugin, lastMessage } = await loadPlugin({
       id: 'plugin-a',
       permissions: ['x'],
     });
@@ -875,7 +879,7 @@ describe('PostMessageRouter additional built-ins', () => {
   it('should call PluginManager.hidePlugin when the plugin declares plugin.self.visibility and requests plugin:hide', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin } = loadPlugin({
+    const { plugin } = await loadPlugin({
       id: 'plugin-a',
       permissions: ['plugin.self.visibility'],
     });
@@ -892,7 +896,7 @@ describe('PostMessageRouter additional built-ins', () => {
   it('should reply INVALID_PARAMS for nui:send when the event field is missing', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({
+    const { plugin, lastMessage } = await loadPlugin({
       id: 'plugin-a',
       permissions: ['runtime.message'],
     });
@@ -912,7 +916,7 @@ describe('PostMessageRouter additional built-ins', () => {
   it('should reply RUNTIME_ERROR with String(err) when a handler throws a non-Error value', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
     router.registerHandler('demo:nonError', () => {
       // 抛字符串——既非 Error、又非 CodedError，触发 String(err) 兜底分支。
       throw 'literal-string-error'; // eslint-disable-line no-throw-literal
@@ -935,7 +939,7 @@ describe('PostMessageRouter param guard branches', () => {
   it('should reply INVALID_PARAMS for auth:hasPermission when the request has no params field at all', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(plugin, makeRequest('req-np', 'auth:hasPermission'));
@@ -952,7 +956,7 @@ describe('PostMessageRouter param guard branches', () => {
   it('should reply INVALID_PARAMS for auth:checkPermissions when the array contains a non-string element', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(
@@ -972,7 +976,7 @@ describe('PostMessageRouter param guard branches', () => {
   it('should reply INVALID_PARAMS for event:unsubscribe when event field is missing', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(plugin, makeRequest('req-uns', 'event:unsubscribe', {}));
@@ -989,7 +993,7 @@ describe('PostMessageRouter param guard branches', () => {
   it('should reply INVALID_PARAMS for event:emit when event field is missing', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, lastMessage } = loadPlugin({
+    const { plugin, lastMessage } = await loadPlugin({
       id: 'plugin-a',
       permissions: ['events.emit'],
     });
@@ -1009,7 +1013,7 @@ describe('PostMessageRouter param guard branches', () => {
   it('should be a no-op when event:unsubscribe targets a different event than the one the plugin subscribed to', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, outbox } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, outbox } = await loadPlugin({ id: 'plugin-a' });
     router.handlePluginMessage(
       plugin,
       makeRequest('s-1', 'event:subscribe', { event: 'plugin:keep' }),
@@ -1028,10 +1032,10 @@ describe('PostMessageRouter param guard branches', () => {
     expect(outbox().filter((m) => m.type === 'reui:push')).toHaveLength(1);
   });
 
-  it('should silently ignore plugin:unloaded for a plugin that never subscribed to anything', () => {
+  it('should silently ignore plugin:unloaded for a plugin that never subscribed to anything', async () => {
     // arrange
     PostMessageRouter.getInstance(); // 触发 plugin:unloaded 监听器注册。
-    const { plugin } = loadPlugin({ id: 'plugin-b' });
+    const { plugin } = await loadPlugin({ id: 'plugin-b' });
 
     // act + assert
     expect(() =>
@@ -1041,10 +1045,10 @@ describe('PostMessageRouter param guard branches', () => {
 });
 
 describe('PostMessageRouter raw envelope guards', () => {
-  it('should silently drop a non-object payload such as a bare string', () => {
+  it('should silently drop a non-object payload such as a bare string', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, fakeWindow } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, fakeWindow } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(plugin, 'not-an-object');
@@ -1053,10 +1057,10 @@ describe('PostMessageRouter raw envelope guards', () => {
     expect(fakeWindow.postMessage).not.toHaveBeenCalled();
   });
 
-  it('should silently drop a record whose type field is not a string', () => {
+  it('should silently drop a record whose type field is not a string', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin, fakeWindow } = loadPlugin({ id: 'plugin-a' });
+    const { plugin, fakeWindow } = await loadPlugin({ id: 'plugin-a' });
 
     // act
     router.handlePluginMessage(plugin, { type: 123, version: PROTOCOL_VERSION });
@@ -1070,7 +1074,7 @@ describe('PostMessageRouter.dispose', () => {
   it('should detach the plugin:unloaded listener so subsequent unloads do not throw and clear all subscriptions', async () => {
     // arrange
     const router = PostMessageRouter.getInstance();
-    const { plugin } = loadPlugin({ id: 'plugin-a' });
+    const { plugin } = await loadPlugin({ id: 'plugin-a' });
     router.handlePluginMessage(
       plugin,
       makeRequest('sub-1', 'event:subscribe', { event: 'plugin:bye' }),
@@ -1082,5 +1086,122 @@ describe('PostMessageRouter.dispose', () => {
 
     // assert: dispose 后 EventBus 上不应再有该插件的订阅。
     expect(EventBus.getInstance().pluginSubscriptionCount('plugin-a')).toBe(0);
+  });
+});
+
+// ── 8. plugin:saveState / plugin:restoreState（Stage A2.3） ───────────
+
+describe('PostMessageRouter.plugin:saveState / restoreState', () => {
+  it('should persist payload via saveState handler when payload is valid', async () => {
+    // arrange
+    const router = PostMessageRouter.getInstance();
+    const { plugin, lastMessage } = await loadPlugin({
+      id: 'plugin-a',
+      permissions: ['plugin.self.state'],
+    });
+    const payload = { theme: 'dark' };
+
+    // act
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('req-save', 'plugin:saveState', { payload }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // assert
+    expect(lastMessage()).toMatchObject({
+      type: 'reui:response',
+      id: 'req-save',
+      success: true,
+      result: { ok: true },
+    });
+    expect(PluginManager.getInstance().loadState('plugin-a')).toEqual(payload);
+  });
+
+  it('should reply PAYLOAD_TOO_LARGE error response when saveState payload exceeds 1MB', async () => {
+    // arrange
+    const router = PostMessageRouter.getInstance();
+    const { plugin, lastMessage } = await loadPlugin({
+      id: 'plugin-a',
+      permissions: ['plugin.self.state'],
+    });
+    const huge = { blob: 'y'.repeat(1.1 * 1024 * 1024) };
+
+    // act
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('req-big', 'plugin:saveState', { payload: huge }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // assert
+    expect(lastMessage()).toMatchObject({
+      type: 'reui:response',
+      id: 'req-big',
+      success: false,
+      error: { code: 'PAYLOAD_TOO_LARGE' },
+    });
+  });
+
+  it('should restore payload null when no state has been stored for the plugin', async () => {
+    // arrange
+    const router = PostMessageRouter.getInstance();
+    const { plugin, lastMessage } = await loadPlugin({
+      id: 'plugin-a',
+      permissions: ['plugin.self.state'],
+    });
+
+    // act
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('req-restore', 'plugin:restoreState'),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // assert
+    expect(lastMessage()).toMatchObject({
+      type: 'reui:response',
+      id: 'req-restore',
+      success: true,
+      result: { payload: null },
+    });
+  });
+
+  it('should restore the prior payload when restoreState follows a successful saveState', async () => {
+    // arrange
+    const router = PostMessageRouter.getInstance();
+    const { plugin, lastMessage } = await loadPlugin({
+      id: 'plugin-a',
+      permissions: ['plugin.self.state'],
+    });
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('req-save', 'plugin:saveState', { payload: { v: 7 } }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // act
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('req-restore', 'plugin:restoreState'),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // assert
+    expect(lastMessage()).toMatchObject({
+      type: 'reui:response',
+      id: 'req-restore',
+      success: true,
+      result: { payload: { v: 7 } },
+    });
+  });
+
+  it('should expose PluginManagerError as an importable class with a code property', () => {
+    // arrange
+    const err = new PluginManagerError('PLUGIN_NOT_FOUND', 'absent');
+
+    // act + assert
+    expect(err).toBeInstanceOf(Error);
+    expect(err.code).toBe('PLUGIN_NOT_FOUND');
   });
 });

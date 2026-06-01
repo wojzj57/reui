@@ -43,6 +43,7 @@ import { HeartbeatMonitor } from './heartbeat-monitor';
 import { NuiBridge } from './nui-bridge';
 import {
   PluginManager,
+  PluginManagerError,
   type PluginInstance,
 } from './plugin-manager';
 import type { MessageDispatcherRouterLike } from './message-dispatcher';
@@ -487,6 +488,33 @@ export class PostMessageRouter implements MessageDispatcherRouterLike {
         return { ok: true };
       },
       'plugin.self.visibility',
+    );
+
+    // plugin:saveState / plugin:restoreState —— 自身状态持久化（RFC-002 §6）。
+    this.registerHandler(
+      'plugin:saveState',
+      ({ plugin, params }) => {
+        const payload = isRecord(params) ? params['payload'] : undefined;
+        try {
+          this.pluginManager.saveState(plugin.id, payload);
+          return { ok: true };
+        } catch (e) {
+          if (e instanceof PluginManagerError) {
+            const err: CodedError = {
+              code: e.code as ErrorCode,
+              message: e.message,
+            };
+            throw err;
+          }
+          throw e;
+        }
+      },
+      'plugin.self.state',
+    );
+    this.registerHandler(
+      'plugin:restoreState',
+      ({ plugin }) => ({ payload: this.pluginManager.loadState(plugin.id) ?? null }),
+      'plugin.self.state',
     );
   }
 

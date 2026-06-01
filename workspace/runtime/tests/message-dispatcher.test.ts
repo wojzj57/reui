@@ -24,6 +24,7 @@ import {
   MessageDispatcher,
   type MessageDispatcherRouterLike,
 } from '../src/message-dispatcher';
+import { LayerSystem } from '../src/layer-system';
 
 interface WindowProxyStub {
   postMessage: ReturnType<typeof vi.fn>;
@@ -76,13 +77,13 @@ const installStubPluginManager = (queue: HTMLIFrameElement[]): PluginManager => 
   });
 };
 
-const setupPluginInstance = (id = 'plugin-a'): {
+const setupPluginInstance = async (id = 'plugin-a'): Promise<{
   plugin: PluginInstance;
   fakeWindow: WindowProxyStub;
-} => {
+}> => {
   const stub = makeStubIframe();
   const manager = installStubPluginManager([stub.iframe]);
-  const plugin = manager.loadPlugin(makeManifest({ id }));
+  const plugin = await manager.loadPlugin(makeManifest({ id }));
   return { plugin, fakeWindow: stub.fakeWindow };
 };
 
@@ -93,6 +94,7 @@ beforeEach(() => {
   EventBus.__resetForTests();
   HeartbeatMonitor.__resetForTests();
   NuiBridge.__resetForTests();
+  LayerSystem.__resetForTests();
   PluginManager.__resetForTests();
   MessageDispatcher.__resetForTests();
 });
@@ -100,6 +102,7 @@ beforeEach(() => {
 afterEach(() => {
   MessageDispatcher.__resetForTests();
   PluginManager.__resetForTests();
+  LayerSystem.__resetForTests();
   NuiBridge.__resetForTests();
   HeartbeatMonitor.__resetForTests();
   EventBus.__resetForTests();
@@ -108,7 +111,7 @@ afterEach(() => {
 });
 
 describe('MessageDispatcher.start', () => {
-  it('should register exactly one message listener so a single dispatched event triggers dispatch only once when start is called twice', () => {
+  it('should register exactly one message listener so a single dispatched event triggers dispatch only once when start is called twice', async () => {
     // arrange
     const dispatcher = MessageDispatcher.getInstance();
     const nuiSpy = vi.spyOn(NuiBridge.getInstance(), 'handleGameMessage');
@@ -125,7 +128,7 @@ describe('MessageDispatcher.start', () => {
 });
 
 describe('MessageDispatcher.stop', () => {
-  it('should unbind the listener so later dispatched messages do not trigger any branch', () => {
+  it('should unbind the listener so later dispatched messages do not trigger any branch', async () => {
     // arrange
     const dispatcher = MessageDispatcher.getInstance();
     const nuiSpy = vi.spyOn(NuiBridge.getInstance(), 'handleGameMessage');
@@ -142,7 +145,7 @@ describe('MessageDispatcher.stop', () => {
 });
 
 describe('MessageDispatcher NUI branch', () => {
-  it('should forward event.data to nuiBridge.handleGameMessage when event.source is null', () => {
+  it('should forward event.data to nuiBridge.handleGameMessage when event.source is null', async () => {
     // arrange
     const dispatcher = MessageDispatcher.getInstance();
     const nuiSpy = vi.spyOn(NuiBridge.getInstance(), 'handleGameMessage');
@@ -162,7 +165,7 @@ describe('MessageDispatcher NUI branch', () => {
     expect(router.handlePluginMessage).not.toHaveBeenCalled();
   });
 
-  it('should forward event.data to nuiBridge.handleGameMessage when event.source equals the runtime window', () => {
+  it('should forward event.data to nuiBridge.handleGameMessage when event.source equals the runtime window', async () => {
     // arrange
     const dispatcher = MessageDispatcher.getInstance();
     const nuiSpy = vi.spyOn(NuiBridge.getInstance(), 'handleGameMessage');
@@ -179,9 +182,9 @@ describe('MessageDispatcher NUI branch', () => {
 });
 
 describe('MessageDispatcher iframe branch', () => {
-  it('should call router.handlePluginMessage with the matching plugin and data when source is a registered iframe contentWindow and data is a reui envelope', () => {
+  it('should call router.handlePluginMessage with the matching plugin and data when source is a registered iframe contentWindow and data is a reui envelope', async () => {
     // arrange
-    const { plugin, fakeWindow } = setupPluginInstance();
+    const { plugin, fakeWindow } = await setupPluginInstance();
     const dispatcher = MessageDispatcher.getInstance();
     const router: MessageDispatcherRouterLike = {
       handlePluginMessage: vi.fn(),
@@ -198,9 +201,9 @@ describe('MessageDispatcher iframe branch', () => {
     expect(router.handlePluginMessage).toHaveBeenCalledWith(plugin, data);
   });
 
-  it('should drop the event silently without throwing when data from a registered iframe is not an object', () => {
+  it('should drop the event silently without throwing when data from a registered iframe is not an object', async () => {
     // arrange
-    const { fakeWindow } = setupPluginInstance();
+    const { fakeWindow } = await setupPluginInstance();
     const dispatcher = MessageDispatcher.getInstance();
     const router: MessageDispatcherRouterLike = {
       handlePluginMessage: vi.fn(),
@@ -217,9 +220,9 @@ describe('MessageDispatcher iframe branch', () => {
     expect(nuiSpy).not.toHaveBeenCalled();
   });
 
-  it('should drop the event when data.type is not prefixed with "reui:"', () => {
+  it('should drop the event when data.type is not prefixed with "reui:"', async () => {
     // arrange
-    const { fakeWindow } = setupPluginInstance();
+    const { fakeWindow } = await setupPluginInstance();
     const dispatcher = MessageDispatcher.getInstance();
     const router: MessageDispatcherRouterLike = {
       handlePluginMessage: vi.fn(),
@@ -237,9 +240,9 @@ describe('MessageDispatcher iframe branch', () => {
     expect(router.handlePluginMessage).not.toHaveBeenCalled();
   });
 
-  it('should drop the event when source is neither null/window nor a registered iframe', () => {
+  it('should drop the event when source is neither null/window nor a registered iframe', async () => {
     // arrange
-    setupPluginInstance(); // registers a plugin so manager is non-empty
+    await setupPluginInstance(); // registers a plugin so manager is non-empty
     const dispatcher = MessageDispatcher.getInstance();
     const router: MessageDispatcherRouterLike = {
       handlePluginMessage: vi.fn(),
@@ -259,9 +262,9 @@ describe('MessageDispatcher iframe branch', () => {
 });
 
 describe('MessageDispatcher router lifecycle', () => {
-  it('should not throw and not invoke nui branch when router is unset and a registered iframe sends a reui envelope', () => {
+  it('should not throw and not invoke nui branch when router is unset and a registered iframe sends a reui envelope', async () => {
     // arrange
-    const { fakeWindow } = setupPluginInstance();
+    const { fakeWindow } = await setupPluginInstance();
     const dispatcher = MessageDispatcher.getInstance();
     const nuiSpy = vi.spyOn(NuiBridge.getInstance(), 'handleGameMessage');
     dispatcher.start();
@@ -276,9 +279,9 @@ describe('MessageDispatcher router lifecycle', () => {
     expect(nuiSpy).not.toHaveBeenCalled();
   });
 
-  it('should route to the newly installed router after setRouter is called', () => {
+  it('should route to the newly installed router after setRouter is called', async () => {
     // arrange
-    const { plugin, fakeWindow } = setupPluginInstance();
+    const { plugin, fakeWindow } = await setupPluginInstance();
     const dispatcher = MessageDispatcher.getInstance();
     dispatcher.start();
     const router: MessageDispatcherRouterLike = {
@@ -296,7 +299,7 @@ describe('MessageDispatcher router lifecycle', () => {
 });
 
 describe('MessageDispatcher constructor guards', () => {
-  it('should throw when no window is provided and globalThis.window is undefined', () => {
+  it('should throw when no window is provided and globalThis.window is undefined', async () => {
     // arrange
     const originalWindow = globalThis.window;
     // 模拟非 DOM 环境：临时移除 globalThis.window。
@@ -318,9 +321,9 @@ describe('MessageDispatcher constructor guards', () => {
 });
 
 describe('MessageDispatcher eventBus failure isolation', () => {
-  it('should swallow eventBus.emit failures when reporting dispatcher:error so a faulty bus cannot crash the listener', () => {
+  it('should swallow eventBus.emit failures when reporting dispatcher:error so a faulty bus cannot crash the listener', async () => {
     // arrange
-    const { fakeWindow } = setupPluginInstance();
+    const { fakeWindow } = await setupPluginInstance();
     const fakeBus = {
       emit: vi.fn(() => {
         throw new Error('bus boom');
@@ -351,9 +354,9 @@ describe('MessageDispatcher eventBus failure isolation', () => {
 });
 
 describe('MessageDispatcher error isolation', () => {
-  it('should not let router exceptions bubble out and should emit dispatcher:error then keep handling further events', () => {
+  it('should not let router exceptions bubble out and should emit dispatcher:error then keep handling further events', async () => {
     // arrange
-    const { fakeWindow } = setupPluginInstance();
+    const { fakeWindow } = await setupPluginInstance();
     const bus = EventBus.getInstance();
     const dispatcher = MessageDispatcher.getInstance();
     const errorHandler = vi.fn();
@@ -387,7 +390,7 @@ describe('MessageDispatcher error isolation', () => {
     expect(errorHandler).toHaveBeenCalledWith({ error: boom, source: 'plugin' });
   });
 
-  it('should not let nuiBridge exceptions bubble out and should emit dispatcher:error then keep handling further events', () => {
+  it('should not let nuiBridge exceptions bubble out and should emit dispatcher:error then keep handling further events', async () => {
     // arrange
     const bus = EventBus.getInstance();
     const dispatcher = MessageDispatcher.getInstance();

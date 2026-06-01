@@ -49,3 +49,6 @@ export type {
   RequestHandlerCtx,
   PostMessageRouterOptions,
 } from './post-message-router';
+
+export { LayerSystem } from './layer-system';
+export type { LayerType, LayerSystemOptions } from './layer-system';

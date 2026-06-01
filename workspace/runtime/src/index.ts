@@ -42,3 +42,10 @@ export type {
   ParsedEventName,
   NamespaceError,
 } from './event-namespace';
+
+export { PostMessageRouter } from './post-message-router';
+export type {
+  RequestHandler,
+  RequestHandlerCtx,
+  PostMessageRouterOptions,
+} from './post-message-router';

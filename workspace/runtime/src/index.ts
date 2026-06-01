@@ -14,6 +14,9 @@ export type { UserInfo, Unsubscribe as AuthUnsubscribe } from './auth-service';
 export { NuiBridge } from './nui-bridge';
 export type { NuiBridgeMode } from './nui-bridge';
 
+export { HeartbeatMonitor } from './heartbeat-monitor';
+export type { HeartbeatTarget } from './heartbeat-monitor';
+
 export {
   KNOWN_NAMESPACES,
   parseEventName,

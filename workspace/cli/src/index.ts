@@ -16,3 +16,10 @@ export * from './signer';
 export * from './permission';
 export * from './scanner';
 export * from './project';
+export {
+  runValidate,
+  runSign,
+  runVerify,
+  runList,
+  runInit,
+} from './cli/commands';

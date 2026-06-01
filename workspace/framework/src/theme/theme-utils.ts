@@ -10,7 +10,8 @@
  *     · undefined → 跳过；
  * - camelToKebab：driveBy / accentHover → drive-by / accent-hover；
  * - tokensToCssVars：把 DesignTokens 摊平为 CSS Custom Properties 对象，
- *   形如 `--reui-color-bg-primary`。
+ *   形如 `--reui-color-bg-primary`（注意：分类前缀为单数 `color`，
+ *   与 RFC-004 §3.1 保持一致）。
  */
 
 import type { DesignTokens } from './tokens';
@@ -60,18 +61,47 @@ export function camelToKebab(input: string): string {
 }
 
 /**
+ * 已知 DesignTokens 分类 → CSS 变量分类前缀（单数）。
+ * 对齐 RFC-004 §3.1 的命名约定：`--reui-color-*` / `--reui-font-size-*` 等。
+ */
+const CATEGORY_PREFIX: Record<keyof DesignTokens, string> = {
+  colors: 'color',
+  spacing: 'spacing',
+  radius: 'radius',
+  fontSize: 'font-size',
+  animation: 'animation',
+  shadow: 'shadow',
+};
+
+/**
  * 将 DesignTokens 摊平为 CSS Custom Properties 字典，
  * key 形如 `--reui-{category}-{field}`，value 直接是 token 字符串。
  *
- * 仅扁平到一级嵌套——RFC-004 中 token 树都是两层（category.field）。
- * 如果 token 内部嵌套对象（如自定义扩展），会递归追加 path。
+ * 已知分类（colors / spacing / radius / fontSize / animation / shadow）
+ * 走 CATEGORY_PREFIX 映射，输出单数前缀（color / font-size / ...）。
+ * 未知顶层键（例如测试注入的 `extra: 42`）走 fallback：
+ *   - 原始值 → `${prefix}-${camelToKebab(key)}`；
+ *   - 嵌套对象 → 递归 walk，保持原 "stringify 非 string 叶子" 契约。
  */
 export function tokensToCssVars(
   tokens: DesignTokens,
   prefix = '--reui',
 ): Record<string, string> {
   const out: Record<string, string> = {};
-  walk(tokens as unknown as Record<string, unknown>, prefix, out);
+  const node = tokens as unknown as Record<string, unknown>;
+  for (const key of Object.keys(node)) {
+    const v = node[key];
+    if (key in CATEGORY_PREFIX && isPlainObject(v)) {
+      const category = CATEGORY_PREFIX[key as keyof DesignTokens];
+      for (const field of Object.keys(v)) {
+        out[`${prefix}-${category}-${camelToKebab(field)}`] = String(v[field]);
+      }
+    } else if (isPlainObject(v)) {
+      walk(v, `${prefix}-${camelToKebab(key)}`, out);
+    } else {
+      out[`${prefix}-${camelToKebab(key)}`] = String(v);
+    }
+  }
   return out;
 }
 
@@ -85,16 +115,4 @@ function walk(node: Record<string, unknown>, path: string, out: Record<string, s
       out[next] = String(v);
     }
   }
-}
-
-/**
- * 仅返回前缀已存在的 token 字符串值——常用于调试 / Hooks 直接读 token 的辅助。
- */
-export function flattenTokens(tokens: DesignTokens): Record<string, string> {
-  const out: Record<string, string> = {};
-  walk(tokens as unknown as Record<string, unknown>, '', out);
-  // 移除前导短横线
-  const trimmed: Record<string, string> = {};
-  for (const k of Object.keys(out)) trimmed[k.replace(/^-+/, '')] = out[k]!;
-  return trimmed;
 }

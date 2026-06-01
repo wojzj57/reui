@@ -6,10 +6,9 @@ import { describe, expect, it } from 'vitest';
 import {
   camelToKebab,
   deepMerge,
-  flattenTokens,
   tokensToCssVars,
-} from '../src/theme/theme-utils';
-import { defaultTheme, type DesignTokens } from '../src/theme/tokens';
+} from '../../src/theme/theme-utils';
+import { defaultTheme, type DesignTokens } from '../../src/theme/tokens';
 
 describe('camelToKebab', () => {
   it('should convert single-word camelCase', () => {
@@ -92,17 +91,28 @@ describe('deepMerge', () => {
 });
 
 describe('tokensToCssVars', () => {
-  it('should produce kebab-cased CSS custom properties', () => {
+  it('should produce kebab-cased CSS custom properties with singular category prefix', () => {
     const vars = tokensToCssVars(defaultTheme);
-    expect(vars['--reui-colors-bg-primary']).toBe(defaultTheme.colors.bgPrimary);
+    // RFC-004 §3.1：分类前缀使用单数（color / font-size 等）。
+    expect(vars['--reui-color-bg-primary']).toBe(defaultTheme.colors.bgPrimary);
+    expect(vars['--reui-color-accent']).toBe(defaultTheme.colors.accent);
     expect(vars['--reui-spacing-md']).toBe('12px');
+    expect(vars['--reui-radius-md']).toBe(defaultTheme.radius.md);
+    expect(vars['--reui-font-size-md']).toBe(defaultTheme.fontSize.md);
     expect(vars['--reui-animation-easing']).toBe(defaultTheme.animation.easing);
+    expect(vars['--reui-shadow-md']).toBe(defaultTheme.shadow.md);
+  });
+
+  it('should not emit the legacy plural prefix', () => {
+    const vars = tokensToCssVars(defaultTheme);
+    expect(vars['--reui-colors-bg-primary']).toBeUndefined();
+    expect(vars['--reui-colors-accent']).toBeUndefined();
   });
 
   it('should respect custom prefix', () => {
     const vars = tokensToCssVars(defaultTheme, '--my');
-    expect(vars['--my-colors-accent']).toBe(defaultTheme.colors.accent);
-    expect(vars['--reui-colors-accent']).toBeUndefined();
+    expect(vars['--my-color-accent']).toBe(defaultTheme.colors.accent);
+    expect(vars['--reui-color-accent']).toBeUndefined();
   });
 
   it('should output every leaf token', () => {
@@ -111,7 +121,7 @@ describe('tokensToCssVars', () => {
     expect(Object.keys(vars).length).toBe(16 + 6 + 4 + 6 + 4 + 3);
   });
 
-  it('should stringify non-string leaves', () => {
+  it('should stringify non-string leaves on unknown top-level keys', () => {
     const tokens = {
       colors: { ...defaultTheme.colors },
       spacing: { ...defaultTheme.spacing },
@@ -120,17 +130,23 @@ describe('tokensToCssVars', () => {
       animation: { ...defaultTheme.animation },
       shadow: { ...defaultTheme.shadow },
     } as DesignTokens & Record<string, unknown>;
-    // 注入一个数字以验证 String(...) 转换
+    // 注入一个数字以验证 String(...) 转换 + 未知顶层键的 fallback 路径。
     (tokens as Record<string, unknown>).extra = 42;
     const vars = tokensToCssVars(tokens as DesignTokens);
     expect(vars['--reui-extra']).toBe('42');
   });
-});
 
-describe('flattenTokens', () => {
-  it('should join keys with hyphen and drop leading prefix', () => {
-    const flat = flattenTokens(defaultTheme);
-    expect(flat['colors-accent']).toBe(defaultTheme.colors.accent);
-    expect(flat['spacing-xl']).toBe(defaultTheme.spacing.xl);
+  it('should recursively flatten unknown nested top-level keys', () => {
+    const tokens = {
+      colors: { ...defaultTheme.colors },
+      spacing: { ...defaultTheme.spacing },
+      radius: { ...defaultTheme.radius },
+      fontSize: { ...defaultTheme.fontSize },
+      animation: { ...defaultTheme.animation },
+      shadow: { ...defaultTheme.shadow },
+    } as DesignTokens & Record<string, unknown>;
+    (tokens as Record<string, unknown>).customGroup = { fooBar: 'baz' };
+    const vars = tokensToCssVars(tokens as DesignTokens);
+    expect(vars['--reui-custom-group-foo-bar']).toBe('baz');
   });
 });

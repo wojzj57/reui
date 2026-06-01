@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { defaultTheme } from '../src/theme/tokens';
+import { defaultTheme } from '../../src/theme/tokens';
 
 describe('defaultTheme', () => {
   it('should expose all six categories', () => {

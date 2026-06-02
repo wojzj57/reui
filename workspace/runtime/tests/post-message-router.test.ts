@@ -246,14 +246,14 @@ describe('PostMessageRouter.request', () => {
     router.registerHandler('demo:echo', ({ params }) => ({ echoed: params }));
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-1', 'demo:echo', { x: 1 }));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:1', 'demo:echo', { x: 1 }));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     const res = lastMessage();
     expect(res).toMatchObject({
       type: 'reui:response',
-      id: 'req-1',
+      id: 'plugin-a:1',
       success: true,
       result: { echoed: { x: 1 } },
     });
@@ -265,13 +265,13 @@ describe('PostMessageRouter.request', () => {
     const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-2', 'unknown:method'));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:2', 'unknown:method'));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-2',
+      id: 'plugin-a:2',
       success: false,
       error: { code: 'METHOD_NOT_FOUND' },
     });
@@ -287,13 +287,13 @@ describe('PostMessageRouter.request', () => {
     router.registerHandler('secure:doIt', () => 'ok', 'secure.write');
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-3', 'secure:doIt'));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:3', 'secure:doIt'));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-3',
+      id: 'plugin-a:3',
       success: false,
       error: { code: 'CAPABILITY_DENIED' },
     });
@@ -310,14 +310,14 @@ describe('PostMessageRouter.request', () => {
     router.registerHandler('secure:doIt', handler, 'secure.write');
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-4', 'secure:doIt'));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:4', 'secure:doIt'));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(handler).toHaveBeenCalledTimes(1);
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-4',
+      id: 'plugin-a:4',
       success: true,
       result: 42,
     });
@@ -335,13 +335,13 @@ describe('PostMessageRouter.request', () => {
     });
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-5', 'demo:fail'));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:5', 'demo:fail'));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-5',
+      id: 'plugin-a:5',
       success: false,
       error: { code: 'PAYLOAD_TOO_LARGE', message: 'quota exceeded' },
     });
@@ -356,13 +356,13 @@ describe('PostMessageRouter.request', () => {
     });
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-6', 'demo:boom'));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:6', 'demo:boom'));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-6',
+      id: 'plugin-a:6',
       success: false,
       error: { code: 'RUNTIME_ERROR', message: 'nope' },
     });
@@ -374,13 +374,13 @@ describe('PostMessageRouter.request', () => {
     const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-7', 'anything', undefined, 999));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:7', 'anything', undefined, 999));
 
     // assert
     const res = lastMessage();
     expect(res).toMatchObject({
       type: 'reui:response',
-      id: 'req-7',
+      id: 'plugin-a:7',
       success: false,
       error: { code: 'VERSION_MISMATCH' },
     });
@@ -460,7 +460,7 @@ describe('PostMessageRouter event subscription', () => {
     const { plugin, outbox } = await loadPlugin({ id: 'plugin-a' });
     router.handlePluginMessage(
       plugin,
-      makeRequest('sub-1', 'event:subscribe', { event: 'plugin:hello' }),
+      makeRequest('plugin-a:201', 'event:subscribe', { event: 'plugin:hello' }),
     );
     await vi.advanceTimersByTimeAsync(0);
 
@@ -483,12 +483,12 @@ describe('PostMessageRouter event subscription', () => {
     const { plugin, outbox } = await loadPlugin({ id: 'plugin-a' });
     router.handlePluginMessage(
       plugin,
-      makeRequest('sub-1', 'event:subscribe', { event: 'plugin:hello' }),
+      makeRequest('plugin-a:201', 'event:subscribe', { event: 'plugin:hello' }),
     );
     await vi.advanceTimersByTimeAsync(0);
     router.handlePluginMessage(
       plugin,
-      makeRequest('unsub-1', 'event:unsubscribe', { event: 'plugin:hello' }),
+      makeRequest('plugin-a:202', 'event:unsubscribe', { event: 'plugin:hello' }),
     );
     await vi.advanceTimersByTimeAsync(0);
 
@@ -505,7 +505,7 @@ describe('PostMessageRouter event subscription', () => {
     const { plugin, outbox } = await loadPlugin({ id: 'plugin-a' });
     router.handlePluginMessage(
       plugin,
-      makeRequest('sub-1', 'event:subscribe', { event: 'plugin:hello' }),
+      makeRequest('plugin-a:201', 'event:subscribe', { event: 'plugin:hello' }),
     );
     await vi.advanceTimersByTimeAsync(0);
     PluginManager.getInstance().unloadPlugin('plugin-a');
@@ -532,13 +532,13 @@ describe('PostMessageRouter built-in methods', () => {
     });
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-user', 'auth:getUser'));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:101', 'auth:getUser'));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-user',
+      id: 'plugin-a:101',
       success: true,
       result: { id: 'u-1', name: 'tester' },
     });
@@ -558,7 +558,7 @@ describe('PostMessageRouter built-in methods', () => {
     // act
     router.handlePluginMessage(
       plugin,
-      makeRequest('req-nui', 'nui:send', { event: 'open-menu' }),
+      makeRequest('plugin-a:102', 'nui:send', { event: 'open-menu' }),
     );
     await vi.advanceTimersByTimeAsync(0);
 
@@ -566,7 +566,7 @@ describe('PostMessageRouter built-in methods', () => {
     expect(sendToGame).not.toHaveBeenCalled();
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-nui',
+      id: 'plugin-a:102',
       success: false,
       error: { code: 'CAPABILITY_DENIED' },
     });
@@ -586,7 +586,7 @@ describe('PostMessageRouter built-in methods', () => {
     // act
     router.handlePluginMessage(
       plugin,
-      makeRequest('req-nui-ok', 'nui:send', {
+      makeRequest('plugin-a:103', 'nui:send', {
         event: 'open-menu',
         data: { which: 'main' },
       }),
@@ -597,7 +597,7 @@ describe('PostMessageRouter built-in methods', () => {
     expect(sendToGame).toHaveBeenCalledWith('open-menu', { which: 'main' });
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-nui-ok',
+      id: 'plugin-a:103',
       success: true,
     });
   });
@@ -612,7 +612,7 @@ describe('PostMessageRouter built-in methods', () => {
     const showPlugin = vi.spyOn(PluginManager.getInstance(), 'showPlugin');
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-show', 'plugin:show'));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:104', 'plugin:show'));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
@@ -627,14 +627,14 @@ describe('PostMessageRouter built-in methods', () => {
     // act
     router.handlePluginMessage(
       plugin,
-      makeRequest('req-bad', 'auth:hasPermission', {}),
+      makeRequest('plugin-a:105', 'auth:hasPermission', {}),
     );
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-bad',
+      id: 'plugin-a:105',
       success: false,
       error: { code: 'INVALID_PARAMS' },
     });
@@ -652,13 +652,13 @@ describe('PostMessageRouter.unregisterHandler', () => {
     router.unregisterHandler('demo:once');
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-x', 'demo:once'));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:106', 'demo:once'));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-x',
+      id: 'plugin-a:106',
       success: false,
       error: { code: 'METHOD_NOT_FOUND' },
     });
@@ -687,7 +687,7 @@ describe('PostMessageRouter unrecognized envelopes', () => {
     router.handlePluginMessage(plugin, {
       type: 'reui:response',
       version: PROTOCOL_VERSION,
-      id: 'x',
+      id: 'plugin-a:999',
       success: true,
       result: null,
     });
@@ -707,14 +707,14 @@ describe('PostMessageRouter additional built-ins', () => {
     // act
     router.handlePluginMessage(
       plugin,
-      makeRequest('req-cp', 'auth:checkPermissions', { permissions: ['x', 'y'] }),
+      makeRequest('plugin-a:107', 'auth:checkPermissions', { permissions: ['x', 'y'] }),
     );
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-cp',
+      id: 'plugin-a:107',
       success: true,
       result: true,
     });
@@ -728,13 +728,13 @@ describe('PostMessageRouter additional built-ins', () => {
     // act
     router.handlePluginMessage(
       plugin,
-      makeRequest('req-cp-bad', 'auth:checkPermissions', { permissions: 'x' }),
+      makeRequest('plugin-a:108', 'auth:checkPermissions', { permissions: 'x' }),
     );
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
-      id: 'req-cp-bad',
+      id: 'plugin-a:108',
       success: false,
       error: { code: 'INVALID_PARAMS' },
     });
@@ -747,12 +747,12 @@ describe('PostMessageRouter additional built-ins', () => {
     AuthService.getInstance().updateRoles(['admin', 'staff']);
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-roles', 'auth:getRoles'));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:109', 'auth:getRoles'));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
-      id: 'req-roles',
+      id: 'plugin-a:109',
       success: true,
       result: ['admin', 'staff'],
     });
@@ -771,7 +771,7 @@ describe('PostMessageRouter additional built-ins', () => {
     // act
     router.handlePluginMessage(
       plugin,
-      makeRequest('req-emit', 'event:emit', {
+      makeRequest('plugin-a:110', 'event:emit', {
         event: 'plugin:custom',
         payload: { hi: true },
       }),
@@ -788,12 +788,12 @@ describe('PostMessageRouter additional built-ins', () => {
     const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-sub-bad', 'event:subscribe', {}));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:111', 'event:subscribe', {}));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
-      id: 'req-sub-bad',
+      id: 'plugin-a:111',
       success: false,
       error: { code: 'INVALID_PARAMS' },
     });
@@ -807,13 +807,13 @@ describe('PostMessageRouter additional built-ins', () => {
     // act
     router.handlePluginMessage(
       plugin,
-      makeRequest('req-sub-ns', 'event:subscribe', { event: 'unknown:thing' }),
+      makeRequest('plugin-a:112', 'event:subscribe', { event: 'unknown:thing' }),
     );
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
-      id: 'req-sub-ns',
+      id: 'plugin-a:112',
       success: false,
       error: { code: 'INVALID_PARAMS' },
     });
@@ -825,11 +825,11 @@ describe('PostMessageRouter additional built-ins', () => {
     const { plugin, outbox } = await loadPlugin({ id: 'plugin-a' });
     router.handlePluginMessage(
       plugin,
-      makeRequest('s1', 'event:subscribe', { event: 'plugin:dup' }),
+      makeRequest('plugin-a:203', 'event:subscribe', { event: 'plugin:dup' }),
     );
     router.handlePluginMessage(
       plugin,
-      makeRequest('s2', 'event:subscribe', { event: 'plugin:dup' }),
+      makeRequest('plugin-a:204', 'event:subscribe', { event: 'plugin:dup' }),
     );
     await vi.advanceTimersByTimeAsync(0);
 
@@ -848,12 +848,12 @@ describe('PostMessageRouter additional built-ins', () => {
     // act
     router.handlePluginMessage(
       plugin,
-      makeRequest('u-noop', 'event:unsubscribe', { event: 'plugin:never' }),
+      makeRequest('plugin-a:205', 'event:unsubscribe', { event: 'plugin:never' }),
     );
     await vi.advanceTimersByTimeAsync(0);
 
     // assert: 仍然 ack 成功（unsubscribe 是幂等的）。
-    expect(lastMessage()).toMatchObject({ id: 'u-noop', success: true });
+    expect(lastMessage()).toMatchObject({ id: 'plugin-a:205', success: true });
   });
 
   it('should reply with the plugin manifest when plugin:getConfig is invoked', async () => {
@@ -865,12 +865,12 @@ describe('PostMessageRouter additional built-ins', () => {
     });
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-cfg', 'plugin:getConfig'));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:113', 'plugin:getConfig'));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
-      id: 'req-cfg',
+      id: 'plugin-a:113',
       success: true,
       result: { id: 'plugin-a', layer: 'hud', permissions: ['x'] },
     });
@@ -886,7 +886,7 @@ describe('PostMessageRouter additional built-ins', () => {
     const hidePlugin = vi.spyOn(PluginManager.getInstance(), 'hidePlugin');
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-hide', 'plugin:hide'));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:114', 'plugin:hide'));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
@@ -902,12 +902,12 @@ describe('PostMessageRouter additional built-ins', () => {
     });
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-nui-bad', 'nui:send', {}));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:115', 'nui:send', {}));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
-      id: 'req-nui-bad',
+      id: 'plugin-a:115',
       success: false,
       error: { code: 'INVALID_PARAMS' },
     });
@@ -923,12 +923,12 @@ describe('PostMessageRouter additional built-ins', () => {
     });
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-ne', 'demo:nonError'));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:116', 'demo:nonError'));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
-      id: 'req-ne',
+      id: 'plugin-a:116',
       success: false,
       error: { code: 'RUNTIME_ERROR', message: 'literal-string-error' },
     });
@@ -942,12 +942,12 @@ describe('PostMessageRouter param guard branches', () => {
     const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-np', 'auth:hasPermission'));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:117', 'auth:hasPermission'));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
-      id: 'req-np',
+      id: 'plugin-a:117',
       success: false,
       error: { code: 'INVALID_PARAMS' },
     });
@@ -961,13 +961,13 @@ describe('PostMessageRouter param guard branches', () => {
     // act
     router.handlePluginMessage(
       plugin,
-      makeRequest('req-cpm', 'auth:checkPermissions', { permissions: ['x', 1] }),
+      makeRequest('plugin-a:118', 'auth:checkPermissions', { permissions: ['x', 1] }),
     );
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
-      id: 'req-cpm',
+      id: 'plugin-a:118',
       success: false,
       error: { code: 'INVALID_PARAMS' },
     });
@@ -979,12 +979,12 @@ describe('PostMessageRouter param guard branches', () => {
     const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-uns', 'event:unsubscribe', {}));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:119', 'event:unsubscribe', {}));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
-      id: 'req-uns',
+      id: 'plugin-a:119',
       success: false,
       error: { code: 'INVALID_PARAMS' },
     });
@@ -999,12 +999,12 @@ describe('PostMessageRouter param guard branches', () => {
     });
 
     // act
-    router.handlePluginMessage(plugin, makeRequest('req-emit-bad', 'event:emit', {}));
+    router.handlePluginMessage(plugin, makeRequest('plugin-a:120', 'event:emit', {}));
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
-      id: 'req-emit-bad',
+      id: 'plugin-a:120',
       success: false,
       error: { code: 'INVALID_PARAMS' },
     });
@@ -1016,14 +1016,14 @@ describe('PostMessageRouter param guard branches', () => {
     const { plugin, outbox } = await loadPlugin({ id: 'plugin-a' });
     router.handlePluginMessage(
       plugin,
-      makeRequest('s-1', 'event:subscribe', { event: 'plugin:keep' }),
+      makeRequest('plugin-a:206', 'event:subscribe', { event: 'plugin:keep' }),
     );
     await vi.advanceTimersByTimeAsync(0);
 
     // act
     router.handlePluginMessage(
       plugin,
-      makeRequest('u-other', 'event:unsubscribe', { event: 'plugin:other' }),
+      makeRequest('plugin-a:207', 'event:unsubscribe', { event: 'plugin:other' }),
     );
     await vi.advanceTimersByTimeAsync(0);
     EventBus.getInstance().emit('plugin:keep', { kept: true });
@@ -1077,7 +1077,7 @@ describe('PostMessageRouter.dispose', () => {
     const { plugin } = await loadPlugin({ id: 'plugin-a' });
     router.handlePluginMessage(
       plugin,
-      makeRequest('sub-1', 'event:subscribe', { event: 'plugin:bye' }),
+      makeRequest('plugin-a:201', 'event:subscribe', { event: 'plugin:bye' }),
     );
     await vi.advanceTimersByTimeAsync(0);
 
@@ -1104,14 +1104,14 @@ describe('PostMessageRouter.plugin:saveState / restoreState', () => {
     // act
     router.handlePluginMessage(
       plugin,
-      makeRequest('req-save', 'plugin:saveState', { payload }),
+      makeRequest('plugin-a:301', 'plugin:saveState', { payload }),
     );
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-save',
+      id: 'plugin-a:301',
       success: true,
       result: { ok: true },
     });
@@ -1130,14 +1130,14 @@ describe('PostMessageRouter.plugin:saveState / restoreState', () => {
     // act
     router.handlePluginMessage(
       plugin,
-      makeRequest('req-big', 'plugin:saveState', { payload: huge }),
+      makeRequest('plugin-a:302', 'plugin:saveState', { payload: huge }),
     );
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-big',
+      id: 'plugin-a:302',
       success: false,
       error: { code: 'PAYLOAD_TOO_LARGE' },
     });
@@ -1154,14 +1154,14 @@ describe('PostMessageRouter.plugin:saveState / restoreState', () => {
     // act
     router.handlePluginMessage(
       plugin,
-      makeRequest('req-restore', 'plugin:restoreState'),
+      makeRequest('plugin-a:303', 'plugin:restoreState'),
     );
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-restore',
+      id: 'plugin-a:303',
       success: true,
       result: { payload: null },
     });
@@ -1176,21 +1176,21 @@ describe('PostMessageRouter.plugin:saveState / restoreState', () => {
     });
     router.handlePluginMessage(
       plugin,
-      makeRequest('req-save', 'plugin:saveState', { payload: { v: 7 } }),
+      makeRequest('plugin-a:301', 'plugin:saveState', { payload: { v: 7 } }),
     );
     await vi.advanceTimersByTimeAsync(0);
 
     // act
     router.handlePluginMessage(
       plugin,
-      makeRequest('req-restore', 'plugin:restoreState'),
+      makeRequest('plugin-a:303', 'plugin:restoreState'),
     );
     await vi.advanceTimersByTimeAsync(0);
 
     // assert
     expect(lastMessage()).toMatchObject({
       type: 'reui:response',
-      id: 'req-restore',
+      id: 'plugin-a:303',
       success: true,
       result: { payload: { v: 7 } },
     });

@@ -3,10 +3,20 @@ import { resolve } from 'node:path';
 
 export default defineConfig({
   resolve: {
-    alias: {
-      '@reui/interface': resolve(__dirname, '../interface/src/index.ts'),
-      '@reui/cli': resolve(__dirname, '../cli/src/index.ts'),
-    },
+    alias: [
+      {
+        find: /^@reui\/interface\/protocol$/,
+        replacement: resolve(__dirname, '../interface/src/protocol/index.ts'),
+      },
+      {
+        find: /^@reui\/interface$/,
+        replacement: resolve(__dirname, '../interface/src/index.ts'),
+      },
+      {
+        find: /^@reui\/cli$/,
+        replacement: resolve(__dirname, '../cli/src/index.ts'),
+      },
+    ],
   },
   test: {
     environment: 'jsdom',

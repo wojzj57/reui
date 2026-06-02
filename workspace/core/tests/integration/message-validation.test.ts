@@ -139,7 +139,7 @@ describe('Client message validation', () => {
         {
           type: 'reui:response',
           version: 1,
-          id: 'no-such-id',
+          id: 'unknown-plugin:9999',
           success: true,
           result: 'who?',
         },

@@ -18,6 +18,10 @@
     "./schema": {
       "types": "./src/schema/index.ts",
       "import": "./src/schema/index.ts"
+    },
+    "./vite": {
+      "types": "./src/vite/index.ts",
+      "import": "./src/vite/index.ts"
     }
   },
   "scripts": {
@@ -39,7 +43,11 @@
     "typescript": "^5.6.3",
     "vitest": "^2.1.4"
   },
+  "peerDependencies": {
+    "vite": "^5.0.0 || ^6.0.0"
+  },
   "peerDependenciesMeta": {
-    "tsx": { "optional": true }
+    "tsx": { "optional": true },
+    "vite": { "optional": true }
   }
 }

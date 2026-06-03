@@ -16,6 +16,8 @@ export * from './signer';
 export * from './permission';
 export * from './scanner';
 export * from './project';
+export { vitePluginReUI } from './vite/index.js';
+export type { VitePluginReUIOptions } from './vite/index.js';
 export {
   runValidate,
   runSign,

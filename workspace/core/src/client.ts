@@ -521,4 +521,9 @@ export class Client {
   get currentRuntimeOrigin(): string {
     return this.runtimeOrigin;
   }
+
+  /** 当前插件 id（init 后可用，未 init 时为空字符串）。SDK 模块据此过滤自身事件。 */
+  get id(): string {
+    return this.pluginId;
+  }
 }

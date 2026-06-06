@@ -1,8 +1,8 @@
 /**
- * @reui/core 包入口（RFC-001 §4.3）。
+ * @reui/core 包入口（RFC-001 §4.3 / RFC-003 §4）。
  *
- * 当前阶段 RFC-001 仅交付通讯核心 `Client`。RFC-003 将在此处补充
- * `event` / `http` / `ws` / `auth` / `nui` / `plugin` 6 个公开模块。
+ * 交付通讯核心 `Client` 与 6 个公开 SDK 模块：
+ * `event` / `http` / `ws` / `auth` / `nui` / `plugin`。
  */
 
 export { Client } from './client';
@@ -15,6 +15,18 @@ export {
   REQUEST_TIMEOUT_MS,
   SDK_VERSION,
 } from './constants';
+
+// ── RFC-003 §4：公开 SDK 模块 ──────────────────────────────────────────
+export { event } from './event';
+export { http } from './http';
+export type { RequestConfig } from './http';
+export { ws } from './ws';
+export type { MessageHandler, WSState } from './ws';
+export { auth } from './auth';
+export type { UserInfo } from './auth';
+export { nui } from './nui';
+export { plugin } from './plugin';
+export type { PluginConfig } from './plugin';
 
 // 重导出协议常量与错误码类型，方便插件方直接使用。
 export { PROTOCOL_VERSION } from '@reui/interface';

@@ -17,10 +17,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import axios, { type AxiosAdapter } from 'axios';
 import { PROTOCOL_VERSION } from '@reui/interface';
 import { AuthService } from '../src/auth-service';
 import { EventBus } from '../src/event-bus';
 import { HeartbeatMonitor } from '../src/heartbeat-monitor';
+import { HttpClient } from '../src/http-client';
 import { LayerSystem } from '../src/layer-system';
 import { NuiBridge } from '../src/nui-bridge';
 import {
@@ -30,6 +32,11 @@ import {
   type PluginManifestMinimal,
 } from '../src/plugin-manager';
 import { PostMessageRouter } from '../src/post-message-router';
+import {
+  WebSocketManager,
+  type WebSocketCtor,
+  type WebSocketLike,
+} from '../src/websocket-manager';
 
 // ── 测试夹具 ─────────────────────────────────────────────────────────────
 
@@ -161,6 +168,8 @@ beforeEach(() => {
   HeartbeatMonitor.__resetForTests();
   LayerSystem.__resetForTests();
   PluginManager.__resetForTests();
+  HttpClient.__resetForTests();
+  WebSocketManager.__resetForTests();
   PostMessageRouter.__resetForTests();
   // 先把 PluginManager 单例用 stub iframeFactory 拉起，确保后续
   // PostMessageRouter.getInstance() 拿到的是同一个绑定了 stub 的 manager。
@@ -169,6 +178,8 @@ beforeEach(() => {
 
 afterEach(() => {
   PostMessageRouter.__resetForTests();
+  WebSocketManager.__resetForTests();
+  HttpClient.__resetForTests();
   PluginManager.__resetForTests();
   LayerSystem.__resetForTests();
   HeartbeatMonitor.__resetForTests();
@@ -1203,5 +1214,230 @@ describe('PostMessageRouter.plugin:saveState / restoreState', () => {
     // act + assert
     expect(err).toBeInstanceOf(Error);
     expect(err.code).toBe('PLUGIN_NOT_FOUND');
+  });
+});
+
+// ── 9. RFC-003 服务 method：http:request / ws:* + auth push 桥接 ──────────
+
+class RouterFakeSocket implements WebSocketLike {
+  readyState = 0;
+  readonly sent: string[] = [];
+  onopen: ((ev: unknown) => void) | null = null;
+  onclose: ((ev: unknown) => void) | null = null;
+  onmessage: ((ev: { data: unknown }) => void) | null = null;
+  onerror: ((ev: unknown) => void) | null = null;
+  constructor(
+    readonly url: string,
+    readonly protocols?: string | string[],
+  ) {}
+  send(data: string): void {
+    this.sent.push(data);
+  }
+  close(): void {
+    this.readyState = 3;
+  }
+}
+
+const makeHttpClient = (status: number, data: unknown): HttpClient => {
+  const adapter: AxiosAdapter = (config) =>
+    Promise.resolve({
+      data,
+      status,
+      statusText: '',
+      headers: {},
+      config,
+    });
+  return new HttpClient({ axios: axios.create({ adapter }) });
+};
+
+describe('PostMessageRouter.rfc003Services', () => {
+  it('should proxy http:request through HttpClient when capability granted', async () => {
+    // arrange
+    const httpClient = makeHttpClient(200, { players: 2 });
+    const router = PostMessageRouter.getInstance({ httpClient });
+    const { plugin, lastMessage } = await loadPlugin({
+      id: 'plugin-a',
+      permissions: ['runtime.network'],
+    });
+
+    // act
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('plugin-a:1', 'http:request', { method: 'GET', url: '/api' }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // assert
+    expect(lastMessage()).toMatchObject({
+      type: 'reui:response',
+      id: 'plugin-a:1',
+      success: true,
+      result: { status: 200, data: { players: 2 } },
+    });
+  });
+
+  it('should deny http:request with CAPABILITY_DENIED when runtime.network missing', async () => {
+    // arrange
+    const httpClient = makeHttpClient(200, {});
+    const router = PostMessageRouter.getInstance({ httpClient });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
+
+    // act
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('plugin-a:1', 'http:request', { url: '/api' }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // assert
+    expect(lastMessage()).toMatchObject({
+      type: 'reui:response',
+      success: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    });
+  });
+
+  it('should reject http:request without url as INVALID_PARAMS', async () => {
+    // arrange
+    const httpClient = makeHttpClient(200, {});
+    const router = PostMessageRouter.getInstance({ httpClient });
+    const { plugin, lastMessage } = await loadPlugin({
+      id: 'plugin-a',
+      permissions: ['runtime.network'],
+    });
+
+    // act
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('plugin-a:1', 'http:request', { method: 'GET' }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // assert
+    expect(lastMessage()).toMatchObject({
+      type: 'reui:response',
+      success: false,
+      error: { code: 'INVALID_PARAMS' },
+    });
+  });
+
+  it('should forward ws:send to WebSocketManager when capability granted', async () => {
+    // arrange
+    const webSocketManager = new WebSocketManager({
+      WebSocketCtor: RouterFakeSocket as unknown as WebSocketCtor,
+    });
+    const sendSpy = vi.spyOn(webSocketManager, 'send');
+    const router = PostMessageRouter.getInstance({ webSocketManager });
+    const { plugin, lastMessage } = await loadPlugin({
+      id: 'plugin-a',
+      permissions: ['runtime.websocket'],
+    });
+
+    // act
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('plugin-a:1', 'ws:send', { channel: 'chat', data: { t: 1 } }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // assert
+    expect(sendSpy).toHaveBeenCalledWith('chat', { t: 1 });
+    expect(lastMessage()).toMatchObject({
+      type: 'reui:response',
+      success: true,
+      result: { ok: true },
+    });
+  });
+
+  it('should deny ws:send without runtime.websocket capability', async () => {
+    // arrange
+    const webSocketManager = new WebSocketManager({
+      WebSocketCtor: RouterFakeSocket as unknown as WebSocketCtor,
+    });
+    const router = PostMessageRouter.getInstance({ webSocketManager });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
+
+    // act
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('plugin-a:1', 'ws:send', { channel: 'chat', data: 1 }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // assert
+    expect(lastMessage()).toMatchObject({
+      type: 'reui:response',
+      success: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    });
+  });
+
+  it('should return current state for ws:state without capability', async () => {
+    // arrange
+    const webSocketManager = new WebSocketManager({
+      WebSocketCtor: RouterFakeSocket as unknown as WebSocketCtor,
+    });
+    const router = PostMessageRouter.getInstance({ webSocketManager });
+    const { plugin, lastMessage } = await loadPlugin({ id: 'plugin-a' });
+
+    // act
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('plugin-a:1', 'ws:state'),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // assert
+    expect(lastMessage()).toMatchObject({
+      type: 'reui:response',
+      success: true,
+      result: { state: 'disconnected' },
+    });
+  });
+
+  it('should push auth:userChanged to subscribers when AuthService.updateUser fires', async () => {
+    // arrange
+    const router = PostMessageRouter.getInstance();
+    const { plugin, outbox } = await loadPlugin({ id: 'plugin-a' });
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('plugin-a:1', 'event:subscribe', { event: 'auth:userChanged' }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // act
+    AuthService.getInstance().updateUser({
+      id: '1',
+      name: 'Alice',
+      identifiers: [],
+    });
+
+    // assert
+    const push = outbox().find(
+      (m) => m.type === 'reui:push' && m['event'] === 'auth:userChanged',
+    );
+    expect(push).toMatchObject({ payload: { id: '1', name: 'Alice' } });
+  });
+
+  it('should push auth:permissionsChanged to subscribers on updatePermissions', async () => {
+    // arrange
+    const router = PostMessageRouter.getInstance();
+    const { plugin, outbox } = await loadPlugin({ id: 'plugin-a' });
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('plugin-a:1', 'event:subscribe', {
+        event: 'auth:permissionsChanged',
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // act
+    AuthService.getInstance().updatePermissions(['shop.buy']);
+
+    // assert
+    const push = outbox().find(
+      (m) => m.type === 'reui:push' && m['event'] === 'auth:permissionsChanged',
+    );
+    expect(push).toMatchObject({ payload: ['shop.buy'] });
   });
 });

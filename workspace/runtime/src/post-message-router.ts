@@ -16,8 +16,8 @@
  *     （response 用 `success`，handshake-reject 用 `{reason, code}` 等）；
  *   - handshake-ack 的 `runtimeOrigin` 必须填实，永不发空字符串；
  *   - 严禁 `as any`，所有外部输入用 unknown + Zod / type guard；
- *   - 不实现 ws:* / http:* / system:* / exports:* —— 这些 method 不注册即可，
- *     子端会自然得到 METHOD_NOT_FOUND，符合 Stage A1 范围；
+ *   - 已注册 event:* / auth:* / nui:* / plugin:* / http:request / ws:* —— 见
+ *     registerBuiltinMethods；system:* / exports:* 仍未注册（后续 RFC）；
  *   - notify handler 抛错只 emit `router:error`，不通知插件。
  */
 
@@ -40,7 +40,9 @@ import {
 import { AuthService } from './auth-service';
 import { EventBus, type Unsubscribe } from './event-bus';
 import { HeartbeatMonitor } from './heartbeat-monitor';
+import { HttpClient, type HttpRequestConfig, type HttpMethod } from './http-client';
 import { NuiBridge } from './nui-bridge';
+import { WebSocketManager } from './websocket-manager';
 import {
   PluginManager,
   PluginManagerError,
@@ -66,6 +68,8 @@ export interface PostMessageRouterOptions {
   authService?: AuthService;
   nuiBridge?: NuiBridge;
   heartbeat?: HeartbeatMonitor;
+  httpClient?: HttpClient;
+  webSocketManager?: WebSocketManager;
 }
 
 interface RegisteredHandler {
@@ -155,12 +159,16 @@ export class PostMessageRouter implements MessageDispatcherRouterLike {
   private readonly authService: AuthService;
   private readonly nuiBridge: NuiBridge;
   private readonly heartbeat: HeartbeatMonitor;
+  private readonly httpClient: HttpClient;
+  private readonly webSocketManager: WebSocketManager;
 
   private readonly methods = new Map<string, RegisteredHandler>();
   /** pluginId -> (event -> Unsubscribe)。订阅清理与重复订阅守卫均依赖此 Map。 */
   private readonly subscriptions = new Map<string, Map<string, Unsubscribe>>();
 
   private readonly unloadUnsubscribe: Unsubscribe;
+  /** 构造期挂的服务→EventBus 桥接订阅，dispose 时一并解绑。 */
+  private readonly bridgeUnsubscribes: Unsubscribe[] = [];
 
   constructor(opts: PostMessageRouterOptions = {}) {
     this.pluginManager = opts.pluginManager ?? PluginManager.getInstance();
@@ -168,11 +176,25 @@ export class PostMessageRouter implements MessageDispatcherRouterLike {
     this.authService = opts.authService ?? AuthService.getInstance();
     this.nuiBridge = opts.nuiBridge ?? NuiBridge.getInstance();
     this.heartbeat = opts.heartbeat ?? HeartbeatMonitor.getInstance();
+    this.httpClient = opts.httpClient ?? HttpClient.getInstance();
+    this.webSocketManager =
+      opts.webSocketManager ?? WebSocketManager.getInstance();
 
     this.unloadUnsubscribe = this.eventBus.on('plugin:unloaded', (payload) => {
       const pluginId = getStringField(payload, 'pluginId');
       if (pluginId !== undefined) this.cleanupPluginSubscriptions(pluginId);
     });
+
+    // 认证状态变更桥接到 EventBus，供订阅了 auth:* 的插件收到 push。
+    // （ws:* 由 WebSocketManager 自身桥接；nui:* 由 NuiBridge 桥接。）
+    this.bridgeUnsubscribes.push(
+      this.authService.onUserChange((user) =>
+        this.eventBus.emit('auth:userChanged', user),
+      ),
+      this.authService.onPermissionChange((permissions) =>
+        this.eventBus.emit('auth:permissionsChanged', permissions),
+      ),
+    );
 
     this.registerBuiltinMethods();
   }
@@ -249,6 +271,8 @@ export class PostMessageRouter implements MessageDispatcherRouterLike {
 
   dispose(): void {
     this.unloadUnsubscribe();
+    for (const unsub of this.bridgeUnsubscribes) unsub();
+    this.bridgeUnsubscribes.length = 0;
     for (const pluginId of [...this.subscriptions.keys()]) {
       this.cleanupPluginSubscriptions(pluginId);
     }
@@ -516,6 +540,39 @@ export class PostMessageRouter implements MessageDispatcherRouterLike {
       ({ plugin }) => ({ payload: this.pluginManager.loadState(plugin.id) ?? null }),
       'plugin.self.state',
     );
+
+    // http:request —— 经 HttpClient 代理（Runtime 侧附加 token，RFC-003 §3.3）。
+    this.registerHandler(
+      'http:request',
+      async ({ params }) => {
+        const req = parseHttpRequest(params);
+        return await this.httpClient.request(req);
+      },
+      'runtime.network',
+    );
+
+    // ws:* —— WebSocketManager（单连接共享，RFC-003 §3.2）。
+    this.registerHandler(
+      'ws:send',
+      ({ params }) => {
+        const channel = getStringField(params, 'channel');
+        if (channel === undefined) {
+          throw new RouterError(
+            'INVALID_PARAMS',
+            'ws:send requires { channel: string, data?: unknown }',
+          );
+        }
+        const data = isRecord(params) ? params['data'] : undefined;
+        this.webSocketManager.send(channel, data);
+        return { ok: true };
+      },
+      'runtime.websocket',
+    );
+
+    // ws:state —— 纯读，不需 capability。
+    this.registerHandler('ws:state', () => ({
+      state: this.webSocketManager.state,
+    }));
   }
 
   // ── 订阅管理 ─────────────────────────────────────────────────────────
@@ -626,6 +683,50 @@ function getRuntimeOrigin(plugin: PluginInstance): string {
     if (typeof o === 'string' && o.length > 0) return o;
   }
   return plugin.origin;
+}
+
+const HTTP_METHODS: ReadonlySet<HttpMethod> = new Set<HttpMethod>([
+  'GET',
+  'POST',
+  'PUT',
+  'DELETE',
+  'PATCH',
+]);
+
+/** 校验并归一化 `http:request` 的 params。非法时抛 INVALID_PARAMS。 */
+function parseHttpRequest(params: unknown): HttpRequestConfig {
+  const url = getStringField(params, 'url');
+  if (url === undefined) {
+    throw new RouterError(
+      'INVALID_PARAMS',
+      'http:request requires { url: string, method?, data?, headers?, params?, timeout? }',
+    );
+  }
+  const record = isRecord(params) ? params : {};
+
+  let method: HttpMethod = 'GET';
+  const rawMethod = record['method'];
+  if (typeof rawMethod === 'string') {
+    const upper = rawMethod.toUpperCase();
+    if (!HTTP_METHODS.has(upper as HttpMethod)) {
+      throw new RouterError(
+        'INVALID_PARAMS',
+        `http:request method '${rawMethod}' is not supported`,
+      );
+    }
+    method = upper as HttpMethod;
+  }
+
+  const req: HttpRequestConfig = { url, method };
+  if ('data' in record) req.data = record['data'];
+  if (isRecord(record['headers'])) {
+    req.headers = record['headers'] as Record<string, string>;
+  }
+  if (isRecord(record['params'])) {
+    req.params = record['params'] as Record<string, unknown>;
+  }
+  if (typeof record['timeout'] === 'number') req.timeout = record['timeout'];
+  return req;
 }
 
 function toErrorResponse(err: unknown): {

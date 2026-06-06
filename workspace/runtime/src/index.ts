@@ -1,8 +1,9 @@
 /**
  * @reui/runtime 包入口（RFC-003）。
  *
- * 当前阶段交付 EventBus、AuthService 与 event-namespace 路由器；
- * WebSocket / HTTP 客户端等需要真实网络栈的模块在后续 RFC 中分阶段补齐。
+ * 交付 RFC-003 全部 Runtime 单例服务：EventBus、AuthService、HttpClient、
+ * WebSocketManager，以及 PostMessageRouter / PluginManager / LayerSystem
+ * 等核心宿主模块。
  */
 
 export { EventBus } from './event-bus';
@@ -10,6 +11,23 @@ export type { EventHandler, Unsubscribe as EventBusUnsubscribe } from './event-b
 
 export { AuthService } from './auth-service';
 export type { UserInfo, Unsubscribe as AuthUnsubscribe } from './auth-service';
+
+export { HttpClient, HttpClientError } from './http-client';
+export type {
+  HttpClientConfig,
+  HttpClientOptions,
+  HttpRequestConfig,
+  HttpResponse,
+  HttpMethod,
+} from './http-client';
+
+export { WebSocketManager } from './websocket-manager';
+export type {
+  WebSocketManagerOptions,
+  WebSocketCtor,
+  WebSocketLike,
+  WSConnectOptions,
+} from './websocket-manager';
 
 export { NuiBridge } from './nui-bridge';
 export type { NuiBridgeMode } from './nui-bridge';

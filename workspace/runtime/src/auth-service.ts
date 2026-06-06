@@ -13,18 +13,9 @@
  *      这样上游可以放心地把 update* 当作 idempotent 重置接口）。
  */
 
-export interface UserInfo {
-  /** 玩家唯一标识 */
-  id: string;
-  /** 显示名称 */
-  name: string;
-  /** FiveM identifiers，例如 ["steam:xxx", "discord:xxx"] */
-  identifiers: string[];
-  /** 头像 URL（可选） */
-  avatar?: string;
-  /** 业务方扩展字段 */
-  [key: string]: unknown;
-}
+import type { UserInfo } from '@reui/interface';
+
+export type { UserInfo };
 
 export type Unsubscribe = () => void;
 

@@ -196,6 +196,56 @@ describe('WebSocketManager', () => {
     expect(mgr.state).toBe('disconnected');
   });
 
+  it('should close the previous socket and not leak on a second connect', () => {
+    // arrange
+    mgr.connect('wss://a');
+    const first = last();
+    first.open();
+
+    // act: 第二次 connect 应先拆掉旧连接
+    mgr.connect('wss://b');
+    const second = last();
+    second.open();
+
+    // assert: 旧 socket 已关闭，新连接正常
+    expect(first.readyState).toBe(3);
+    expect(second).not.toBe(first);
+    expect(mgr.state).toBe('connected');
+
+    // 旧 socket 的事后 close 不应影响新连接（回调已解绑 + this.ws 守卫）
+    first.serverClose();
+    expect(mgr.state).toBe('connected');
+  });
+
+  it('should reconnect instead of crashing when the socket constructor throws', async () => {
+    // arrange: 第一次构造抛错，之后成功
+    class FlakyCtor extends FakeSocket {
+      static throwOnce = false;
+      constructor(u: string, p?: string | string[]) {
+        super(u, p);
+        if (FlakyCtor.throwOnce) {
+          FlakyCtor.throwOnce = false;
+          throw new Error('SECURITY_ERR');
+        }
+      }
+    }
+    const flaky = new WebSocketManager({
+      eventBus,
+      WebSocketCtor: FlakyCtor as unknown as WebSocketCtor,
+    });
+    FlakyCtor.throwOnce = true;
+
+    // act: 构造抛错被捕获 → 进入退避重连，而非把异常抛到定时器外
+    flaky.connect('wss://x');
+    expect(flaky.state).toBe('reconnecting');
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // assert: 重连这次构造成功
+    last().open();
+    expect(flaky.state).toBe('connected');
+    flaky.disconnect();
+  });
+
   it('should not reconnect after manual disconnect', () => {
     // arrange
     mgr.connect('wss://x');

@@ -65,7 +65,8 @@ export class WebSocketManager {
   private static _instance: WebSocketManager | null = null;
 
   private readonly eventBus: EventBus;
-  private readonly WebSocketCtor: WebSocketCtor;
+  /** 注入的 WebSocket 构造器（未注入时在 open() 时惰性解析全局 WebSocket）。 */
+  private readonly injectedCtor: WebSocketCtor | undefined;
 
   private ws: WebSocketLike | null = null;
   private _state: WSState = 'disconnected';
@@ -82,9 +83,7 @@ export class WebSocketManager {
 
   constructor(opts: WebSocketManagerOptions = {}) {
     this.eventBus = opts.eventBus ?? EventBus.getInstance();
-    this.WebSocketCtor =
-      opts.WebSocketCtor ??
-      (globalThis as { WebSocket?: WebSocketCtor }).WebSocket!;
+    this.injectedCtor = opts.WebSocketCtor;
   }
 
   static getInstance(opts?: WebSocketManagerOptions): WebSocketManager {
@@ -109,6 +108,10 @@ export class WebSocketManager {
   // ── 连接管理 ─────────────────────────────────────────────────────────
 
   connect(url: string, options: WSConnectOptions = {}): void {
+    // 关闭并解绑既有连接，避免重复 connect 泄漏旧 socket 或其陈旧回调
+    // 误触发重连。
+    this.teardownSocket();
+    this.clearReconnectTimer();
     this.url = url;
     this.protocols = options.protocols;
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
@@ -120,14 +123,7 @@ export class WebSocketManager {
   disconnect(): void {
     this.manualClose = true;
     this.clearReconnectTimer();
-    if (this.ws) {
-      try {
-        this.ws.close();
-      } catch {
-        // 忽略关闭异常——状态机已经按 disconnected 处理。
-      }
-      this.ws = null;
-    }
+    this.teardownSocket();
     this.setState('disconnected');
   }
 
@@ -155,18 +151,45 @@ export class WebSocketManager {
 
   private open(): void {
     if (this.url === null) return;
+
+    const Ctor =
+      this.injectedCtor ??
+      (globalThis as { WebSocket?: WebSocketCtor }).WebSocket;
+    if (!Ctor) {
+      // 运行环境无 WebSocket 实现：无法连接，停在 disconnected，
+      // 不进入无限重连。
+      this.setState('disconnected');
+      return;
+    }
+
     this.setState(this.attempts === 0 ? 'connecting' : 'reconnecting');
 
-    const ws = new this.WebSocketCtor(this.url, this.protocols);
+    let ws: WebSocketLike;
+    try {
+      ws = new Ctor(this.url, this.protocols);
+    } catch {
+      // 构造失败（非法 URL / 被安全策略拦截）：按一次连接失败处理，
+      // 走退避重连，而不是把异常抛出到 setTimeout 回调外。
+      this.ws = null;
+      this.scheduleReconnect();
+      return;
+    }
     this.ws = ws;
 
+    // 所有回调先校验 `this.ws === ws`，忽略来自陈旧 socket 的事件，
+    // 避免旧连接的 onclose 把新连接误置空并触发多余重连。
     ws.onopen = () => {
+      if (this.ws !== ws) return;
       this.attempts = 0;
       this.setState('connected');
       this.flushQueue();
     };
-    ws.onmessage = (ev) => this.handleInbound(ev.data);
+    ws.onmessage = (ev) => {
+      if (this.ws !== ws) return;
+      this.handleInbound(ev.data);
+    };
     ws.onclose = () => {
+      if (this.ws !== ws) return;
       if (this.manualClose) return;
       this.ws = null;
       this.scheduleReconnect();
@@ -175,6 +198,22 @@ export class WebSocketManager {
       // onerror 后浏览器通常会继续触发 onclose；此处不额外处理，
       // 交给 onclose 的重连逻辑，避免重复调度。
     };
+  }
+
+  /** 解绑回调并关闭当前 socket（幂等）。 */
+  private teardownSocket(): void {
+    const ws = this.ws;
+    if (!ws) return;
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onclose = null;
+    ws.onerror = null;
+    this.ws = null;
+    try {
+      ws.close();
+    } catch {
+      // 忽略关闭异常——状态机不依赖关闭是否成功。
+    }
   }
 
   private handleInbound(raw: unknown): void {

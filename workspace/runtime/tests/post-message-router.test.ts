@@ -1321,6 +1321,53 @@ describe('PostMessageRouter.rfc003Services', () => {
     });
   });
 
+  it('should reject http:request with empty-string url as INVALID_PARAMS', async () => {
+    // arrange
+    const httpClient = makeHttpClient(200, {});
+    const router = PostMessageRouter.getInstance({ httpClient });
+    const { plugin, lastMessage } = await loadPlugin({
+      id: 'plugin-a',
+      permissions: ['runtime.network'],
+    });
+
+    // act
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('plugin-a:1', 'http:request', { method: 'GET', url: '' }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // assert
+    expect(lastMessage()).toMatchObject({
+      type: 'reui:response',
+      success: false,
+      error: { code: 'INVALID_PARAMS' },
+    });
+  });
+
+  it('should reject event:emit with an unknown namespace as INVALID_PARAMS', async () => {
+    // arrange
+    const router = PostMessageRouter.getInstance();
+    const { plugin, lastMessage } = await loadPlugin({
+      id: 'plugin-a',
+      permissions: ['events.emit'],
+    });
+
+    // act: 无命名空间前缀的事件名应被拒绝
+    router.handlePluginMessage(
+      plugin,
+      makeRequest('plugin-a:1', 'event:emit', { event: 'garbage' }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // assert
+    expect(lastMessage()).toMatchObject({
+      type: 'reui:response',
+      success: false,
+      error: { code: 'INVALID_PARAMS' },
+    });
+  });
+
   it('should forward ws:send to WebSocketManager when capability granted', async () => {
     // arrange
     const webSocketManager = new WebSocketManager({

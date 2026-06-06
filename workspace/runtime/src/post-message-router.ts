@@ -488,6 +488,12 @@ export class PostMessageRouter implements MessageDispatcherRouterLike {
             'event:emit requires { event: string, payload?: unknown }',
           );
         }
+        // 与 event:subscribe 对称：拒绝未知命名空间，避免无前缀/非法事件名
+        // 污染 EventBus（这类事件既无法被命名空间通配匹配，也无法 push 回插件）。
+        const parsed = parseEventName(eventName);
+        if (isNamespaceError(parsed)) {
+          throw new RouterError(parsed.code, parsed.message);
+        }
         const payload = isRecord(params) ? params['payload'] : undefined;
         this.eventBus.emit(eventName, payload);
         return { ok: true };
@@ -696,10 +702,10 @@ const HTTP_METHODS: ReadonlySet<HttpMethod> = new Set<HttpMethod>([
 /** 校验并归一化 `http:request` 的 params。非法时抛 INVALID_PARAMS。 */
 function parseHttpRequest(params: unknown): HttpRequestConfig {
   const url = getStringField(params, 'url');
-  if (url === undefined) {
+  if (!url) {
     throw new RouterError(
       'INVALID_PARAMS',
-      'http:request requires { url: string, method?, data?, headers?, params?, timeout? }',
+      'http:request requires a non-empty { url: string, method?, data?, headers?, params?, timeout? }',
     );
   }
   const record = isRecord(params) ? params : {};

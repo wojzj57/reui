@@ -1,42 +1,51 @@
 
-# RFC-006: Phase 3.5 — Runtime 系统级 UI 服务
+# RFC-006: Phase 3.5 — 系统 UI 插件（System UI Plugin）
 
 | 字段 | 值 |
 |------|-----|
 | **RFC 编号** | 006 |
-| **标题** | Runtime 系统级 UI 服务（Notification / Dialog / Confirm） |
-| **状态** | Draft |
+| **标题** | 系统 UI 插件（全局 Notification / Toast / Dialog / Confirm / Prompt） |
+| **状态** | Draft（v2 重写，2026-06-06） |
 | **作者** | ReUI Team |
 | **创建日期** | 2026-05-29 |
-| **依赖** | RFC-001 (通讯协议), RFC-002 (插件系统 / Layer System), RFC-003 (Runtime 服务) |
-| **被依赖** | RFC-004 (Framework UI 可在其之上封装高级反馈组件) |
+| **重写日期** | 2026-06-06 |
+| **依赖** | RFC-001（通讯协议）, RFC-002（插件系统 / Layer System）, RFC-003（Runtime 服务 / EventBus）, **RFC-007（插件导出与跨插件 / Lua RPC）** |
+| **被依赖** | RFC-004（Framework 可提供系统插件渲染所用的反馈组件）；任何需要全局通知 / 确认能力的业务插件与 Lua 资源 |
+
+> **本版相对 v1 的根本变化：** 系统级 UI 不再是 Runtime 内置单例服务，而是**一个建立在 ReUI 框架之上的特权插件 `reui-system`**。它通过 **RFC-007 的导出机制**对外提供能力，其他插件经 `@reui/core` 访问、Lua 经 `exports.reui:invokePlugin` 访问。**本 RFC 只设计接口与契约,UI 渲染留待后续用 `@reui/framework` 在该插件内实现。**
 
 ---
 
 ## 1. 背景与动机
 
-ReUI 目前的分层非常清晰：
+ReUI 的分层很清晰：
 
-- `@reui/core` 是 iframe 侧的纯通讯 SDK，**不含任何 UI 渲染代码**（RFC-001 §2.2 明确将"UI 组件库"列为非目标）。
-- `@reui/framework` 是**可选的** React 组件库，提供 `Toast / Dialog / Notification` 等组件（RFC-004 §3.3）。
-- 插件运行在 `sandbox="allow-scripts"` 的 iframe 中（RFC-002 §3.6.1），**iframe 内部弹出的 UI 不能溢出到 iframe 边界之外**。
+- `@reui/core` 是 iframe 侧的纯通讯 SDK，**不含任何 UI 渲染代码**（RFC-001 §2.2）。
+- `@reui/framework` 是**可选的** React 组件库（RFC-004）。
+- 插件运行在 `sandbox="allow-scripts"` 的 iframe 中（RFC-002 §3.6.1）。
 
-这就引出了一个目前架构里没有覆盖的需求：**全局/系统级 UI**。具体表现为以下场景：
+存在一类目前没有归属的需求 —— **全局 / 系统级 UI**：
 
-1. 服务端推送一条全服公告，需要覆盖整个屏幕显示，不依赖任何具体插件页面是否打开。
-2. 一个 HUD 类小插件（仅占屏幕一角）希望弹出一个"是否使用医疗包"的全局确认框。
-3. Runtime 自身在加载/卸载插件、检测到插件崩溃时需要给玩家一条提示。
-4. 玩家被踢出/禁言/权限变更等系统级事件需要立刻可见。
-5. Vue / Svelte / 纯 HTML 编写的插件（不引入 `@reui/framework`）也需要"通知/确认"能力，否则就被迫复制实现。
+1. 服务端推一条全服公告，需要覆盖整屏，不依赖任何业务插件是否打开。
+2. 一个只占屏幕一角的 HUD 插件，想弹一个全局"是否使用医疗包"的确认框。
+3. Runtime 加载 / 卸载 / 检测插件崩溃时需要给玩家提示。
+4. **游戏端 Lua** 想弹一条通知或确认框（如"确认购买?"），目前只能广播事件、拿不到结果。
+5. Vue / Svelte / 纯 HTML 插件（不引入 framework）也要"通知 / 确认"能力。
 
-如果让每个插件自己实现这类 UI：
+### 1.1 为什么做成"插件"而不是 Runtime 内置服务
 
-- **视觉不统一**：每个插件实现的弹窗风格各异（违反 RFC-004 G1）。
-- **不能覆盖全屏**：iframe 内部弹窗最多覆盖 iframe 区域，无法跨越到其他插件之上。
-- **Core 不应承载 UI**：在 `@reui/core` 中加入 DOM/React 渲染会突破其"通讯 SDK + < 10KB gzip"的边界（RFC-001 §7.2）。
-- **强行使用 framework**：违反 RFC-004 N1（不强制 React），且要求所有插件预装 `@reui/framework`。
+v1 曾主张把它做成 Runtime 单例服务，理由是"iframe 内 UI 溢不出边界、视觉不统一、core 不该扛 UI"。本版改为**特权插件**模型，因为这些顾虑都可被规避，且插件模型收益更大：
 
-**本 RFC 的解决思路：** 将"系统级 UI"作为 Runtime 的一项**单例服务**实现，渲染权完全归 Runtime，子页面通过 `postMessage` 协议以 RPC 方式调用，`@reui/core` 仅暴露一组**薄包装**的 API（不引入 DOM/框架），与现有 `event / http / ws / auth / nui / plugin` 模块保持一致风格。
+| v1 的顾虑 | 本版的解法 |
+|---|---|
+| iframe 内弹窗溢不出 iframe 边界 | 系统插件不是"占一角的 HUD"，而是**铺满全屏、置顶、默认 `pointer-events:none`** 的特权 iframe —— 渲染区域即整屏，不存在溢出问题 |
+| 各插件视觉不统一 | 系统 UI 由**唯一**的 `reui-system` 插件用 `@reui/framework` 实现，全局只有一套观感 |
+| `@reui/core` 不该承载 UI | core 仍是纯通讯 SDK；它对系统 UI 只做**薄包装**（转发 `exports:invoke`），不含任何 DOM/框架 |
+| 强制所有插件预装 framework | 只有 `reui-system` 这**一个**插件依赖 framework；调用方（任何技术栈 / Lua）只需 core 或 Lua 桥 |
+
+**收益：** UI 用框架自身的能力实现并复用组件库；系统 UI 可独立签名、独立升级；Runtime 内核不掺入任何渲染代码；跨插件 / Lua 调用直接复用 RFC-007 既有链路，无需另造协议。
+
+**代价（已知并接受）：** 系统插件未加载 / 崩溃时**没有全局 UI 兜底**（见 §2.2 N6、§4.4.3 `SYSTEM_UNAVAILABLE`）；调用比内置服务多一跳跨 iframe RPC（toast 仍在一帧内，可接受）。
 
 ---
 
@@ -44,549 +53,379 @@ ReUI 目前的分层非常清晰：
 
 ### 2.1 目标
 
-- **G1** 在 Runtime 内提供一个**单例 SystemUIService**，统一渲染全局 Notification / Dialog / Confirm / Alert / Toast。
-- **G2** 在协议层新增 `system:*` 一组 method，覆盖通知、对话框、确认、警告、轻提示。
-- **G3** 在 LayerSystem 中新增独立的 **System 层**（z-alog` 与 `runtime.notification`），由 PostMessageRouter 统一执行权限检查。
-- **G6** 提供与 RFC-001/003 一致的错误处理（`ReUIError` + `ErrorCode`）和 capability 模型。
-- **G7** 队列化通知（避免短时间内大量请求互相覆盖），对话框的"用户取消"通过专用错误码 `DIALOG_DISMISSED` 上报。
-- **G8** 与现有 Auth / EventBus 风格一致：单例服务 + `subscribeForPlugin` 风格的清理逻辑。
+- **G1** 定义一个**特权系统插件** `reui-system`：建立在 ReUI 框架之上，挂载于 Runtime 预留的全屏置顶 **System 层**，提供全局 Notification / Toast / Alert / Confirm / Prompt。
+- **G2** 该插件通过 **RFC-007 `@expose`** 导出一组方法（`notify / toast / alert / confirm / prompt / dismiss`），**不新增 `system:*` 协议**。
+- **G3** 在 Runtime / LayerSystem 中提供**最小的、仅授予系统插件的契约**：① 预留 System 层槽位；② 焦点仲裁（`SetNuiFocusInput`，因为只有 Runtime 能调 NUI 焦点）；③ 向系统插件转发插件生命周期事件（用于清理失主 UI）。
+- **G4** 在 `@reui/core` 暴露 `system` 模块（**薄包装,转发 `exports:invoke`**），保持与 `event/http/ws/auth/nui/plugin` 一致的类型化体验，**不引入任何 DOM / UI 框架**。
+- **G5** 提供 **Lua 接口**：经 RFC-007 桥 `exports.reui:invokePlugin('reui-system', method, args, cb)` 调用，并可选提供 Lua 语法糖 resource（`exports.reui:notify(...)` 等）。
+- **G6** 复用 RFC-001/003/007 的错误体系（`ReUIError` + `ErrorCode`），用 RFC-007 的 `@expose({ requirePermissions })` 在系统插件侧设访问门槛。
+- **G7** 队列化通知、栈式对话框；"用户取消"是正常返回，**非错误**；仅外部强制关闭才报 `DIALOG_DISMISSED`。
+- **G8** **本期只交付接口 / 类型 / 协议契约 / Lua 契约 / capability / manifest 约定**；UI 渲染由系统插件后续用 framework 实现（§2.2 N1）。
 
 ### 2.2 非目标
 
-- **N1** 不替代 `@reui/framework` 的 `Toast / Diaindex 400-499，最高优先级），不与 HUD / Panel / Overlay 互斥也不参与栈管理。
-- **G4** 在 `@reui/core` 中暴露 `system` 模块（薄包装），**不引入任何 DOM 或 UI 框架**。
-- **G5** 所有调用受 capability 控制（新增 `runtime.dilog`：插件**自身界面内部**的反馈仍由 framework 组件负责；本 RFC 仅解决"必须跨 iframe / 全屏覆盖"的场景。
+- **N1** **本 RFC 不实现任何 UI 渲染**。所有 `notify/dialog/toast` 的视觉、动画、布局都留给 `reui-system` 插件在后续阶段用 `@reui/framework` 实现；本 RFC 仅冻结其**对外接口与行为语义**。
 - **N2** 不在 `@reui/core` 中加入任何 DOM 操作或 UI 框架依赖。
-- **N3** 不实现复杂表单弹窗（如多字段输入）。本期仅支持文本输入框（`prompt`）作为最简表单；复杂表单仍应作为 overlay 插件实现。
-- **N4** 不开放系统层给普通插件作为渲染容器（普通插件仍只能位于 hud/panel/overlay）。系统层**专属于 Runtime SystemUIService**。
-- **N5** 不在本 RFC 引入新的协议版本（仍为 `version: 1`，仅扩展 method 与 capability）。
-- **N6** 不实现持久化的"通知中心"。所有通知都是**瞬时**的，关闭即销毁。
+- **N3** 不实现复杂多字段表单弹窗。本期仅 `prompt` 单文本输入；复杂表单作为普通 overlay 插件实现。
+- **N4** System 层**不向普通 `plugin.json` 开放**：`PluginManifest.layer` 的 Zod Schema 仍只接受 `'hud' | 'panel' | 'overlay'`。System 层专属于被标记为系统插件且签名受信的 `reui-system`（见 §4.1）。
+- **N5** 不新增协议版本（仍 `version: 1`）；不新增 `system:*` method —— 调用一律走 RFC-007 的 `exports:invoke`。
+- **N6** **不提供 Runtime 原生 UI 兜底**。系统插件不可用时,调用返回 `SYSTEM_UNAVAILABLE`,由调用方自行降级（如打印日志 / 本地 toast）。
+- **N7** 不实现持久化"通知中心"。所有通知瞬时，关闭即销毁。
 
 ---
 
 ## 3. 整体架构
 
 ```
-┌────────────────────────── Runtime（宿主页面） ──────────────────────────┐
-│                                                                       │
-│  ┌─────────────────┐    ┌────────────────────┐    ┌────────────────┐  │
-│  │ PostMessage     │    │ SystemUIService     │    │  LayerSystem   │  │
-│  │ Router          │───→│ (Singleton)         │───→│  System Layer  │  │
-│  │  + capability   │    │  • notify()         │    │  z-index 400+  │  │
-│  │  + 路由分发      │    │  • confirm()        │    │  (DOM 容器)    │  │
-│  └─────────────────┘    │  • alert()          │    └────────────────┘  │
-│         ▲                │  • prompt()         │                       │
-│         │                │  • toast()          │                       │
-│         │                │  • notifQueue       │                       │
-│         │                │  • dialogStack      │                       │
-│         │                └────────────────────┘                       │
-└─────────┼──────────────────────────────────────────────────────────────┘
-          │ reui:request {method:"system:*"}
-          │ reui:response {success/dismissed}
-          │ reui:push     {event:"system:*"}
-          │
-┌─────────┼─────────── 任意子页面 iframe（Vue/React/纯 HTML） ───────────┐
-│         ▼                                                              │
-│  @reui/core                                                            │
-│   └── system (薄包装)                                                  │
-│        • notify()  • confirm()  • alert()  • prompt()  • toast()      │
-└────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────── Runtime（宿主页面，零渲染代码） ──────────────────────────┐
+│                                                                                    │
+│  ┌─────────────────┐   ┌────────────────────┐   ┌──────────────────────────────┐  │
+│  │ PostMessage     │   │  ExportRegistry     │   │  LayerSystem                  │  │
+│  │ Router          │──▶│  (RFC-007 单例)      │   │   • System 层槽位 (z 400-499) │  │
+│  │  + capability   │   │   • 路由 exports:    │   │   • acquireFocus/releaseFocus │  │
+│  │                 │   │     invoke           │   │     (仅 runtime.systemLayer)  │  │
+│  └─────────────────┘   └─────────┬──────────┘   └──────────────┬───────────────┘  │
+│                                  │ 转发到目标插件                │ 挂载 iframe        │
+└──────────────────────────────────┼──────────────────────────────┼──────────────────┘
+        ▲ exports:invoke            │                              │
+        │ (reui:request)            ▼                              ▼
+┌───────┴────────────┐   ┌──────────────────────────────────────────────────────────┐
+│ 任意调用方 iframe   │   │  reui-system 插件 iframe（全屏置顶 / framework 实现 UI）    │
+│  @reui/core         │   │   @expose notify / toast / alert / confirm / prompt /      │
+│   └── system        │   │           dismiss                                          │
+│     (薄包装,转发     │   │   • notifQueue（≤5）   • dialogStack（≤8）                 │
+│      exports:invoke)│   │   • 失主清理（订阅 plugin:unloaded/crashed）               │
+└────────────────────┘   │   • 渲染：后续用 @reui/framework（本 RFC 不实现）          │
+                         └──────────────────────────────────────────────────────────┘
+        ▲ exports.reui:invokePlugin('reui-system', ...)
+        │
+┌───────┴──────────────── 游戏端 Lua（RFC-007 自带桥 resource） ─────────────────────┐
+│  exports.reui:invokePlugin('reui-system','confirm',{message='确认购买?'}, cb)       │
+│  （可选语法糖）exports.reui:notify('已保存','success')                              │
+└────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **架构要点：**
 
-1. **System 层独立于 HUD/Panel/Overlay**：它不是"另一种插件"，而是 Runtime 自己控制的 DOM 区域，不创建 iframe，没有沙箱越界问题，可以直接调用游戏的 `SetNuiFocusInput`。
-2. **Core 仍是纯通讯 SDK**：`@reui/core/system` 仅是 5–6 个 `client.request()` 的薄包装，不引入任何 DOM 操作或 UI 框架。
-3. **唯一渲染权**：所有系统级 UI 元素都在 Runtime 主文档中渲染，避免 iframe 边界限制。
-4. **可选承载方式**：System 层的具体渲染既可以是 Runtime 内置的轻量原生实现（Phase A），也可以由 Runtime **预置加载**的 `@reui/framework` 实例承载（Phase B，可选优化）；对调用方完全透明。
+1. **系统 UI 是一个插件**，不是 Runtime 服务。它和普通插件一样被 PluginManager 加载、签名校验、生命周期管理；唯一区别是它被标记为**系统插件**，因而获得 System 层与若干特权 capability。
+2. **调用一律走 RFC-007**：任何"调用系统 UI"= 一次 `exports:invoke('reui-system', method, args)`，由 ExportRegistry 路由。无新增协议。
+3. **Runtime 只保留插件做不到的三件事**：System 层槽位、NUI 焦点仲裁、生命周期事件转发。除此之外 Runtime **不含任何系统 UI 逻辑或渲染**。
+4. **core / Lua 都是薄包装**：core 的 `system.*` 转发 `exports:invoke`；Lua 走 RFC-007 桥 + 可选语法糖。
 
 ---
 
 ## 4. 详细设计
 
-### 4.1 LayerSystem 扩展
+### 4.1 系统插件定位与 manifest（扩展 RFC-002）
 
-在 RFC-002 §3.5 的基础上新增 **System 层**：
+`reui-system` 是一个**特权插件**。在 RFC-002 的 `PluginManifest` 上**新增一个受限字段**以标记系统插件，并约束其只能由受信签名启用：
 
-| 层级 | z-index 范围 | 可见性 | 输入行为 | 管理模式 | 来源 |
-|------|-------------|--------|----------|----------|------|
-| HUD | 100-199 | 始终可见 | `pointer-events: none` | 独立并存 | 普通插件 iframe |
-| Panel | 200-299 | 按需切换 | `SetNuiFocusInput(true)` | 互斥 | 普通插件 iframe |
-| Overlay | 300-399 | 栈式弹出 | 遮罩阻止下层 | 栈式管理 | 普通插件 iframe |
-| **System** | **400-499** | **按需弹出** | **dialog 时拦截输入；toast/notif 鼠标穿透** | **队列 + 栈** | **Runtime 内部 DOM** |
-
-#### 4.1.1 LayerType 枚举扩展
-
-```typescript
-// runtime/src/layer/types.ts
-export type LayerType = 'hud' | 'panel' | 'overlay' | 'system';
+```jsonc
+// reui-system/plugin.json
+{
+  "id": "reui-system",
+  "name": "ReUI System UI",
+  "version": "1.0.0",
+  "entry": "index.html",
+  "kind": "system",              // ★ 新增：标记为系统插件（普通插件不可声明）
+  "layer": "system",             // 仅当 kind === 'system' 时 Schema 才接受
+  "permissions": [
+    "runtime.systemLayer",       // ★ 新增特权：System 层 + 焦点 + 生命周期事件
+    "exports.expose"             // RFC-007：允许 @expose 注册导出
+  ]
+}
 ```
 
-> **重要：** `system` 层**不向 `plugin.json` 开放**——`PluginManifest.layer` 的 Zod Schema 仍然只接受 `'hud' | 'panel' | 'overlay'`（与 RFC-002 §3.1.1 保持一致）。任何插件配置 `layer: 'system'` 的 plugin.json 都会被服务端 Schema 校验拒绝。
+**Schema 约束（在 RFC-002 §3.1.1 基础上）：**
 
-#### 4.1.2 LayerSystem API 扩展
+- 新增可选字段 `kind?: 'system'`。**默认（不声明）为普通插件。**
+- `layer: 'system'` 与 `permissions` 中的 `runtime.systemLayer` **仅在 `kind === 'system'` 时合法**；普通插件声明这三者中任意一个 → Schema 校验失败。
+- `kind: 'system'` 的插件**必须经受信密钥签名**（RFC-005 `reui sign` 的高权限密钥），未签名 / 普通签名一律拒绝加载。
+- 一个 Runtime 实例**至多注册一个** `kind: 'system'` 插件；重复注册 → `SYSTEM_ALREADY_REGISTERED`（仅 Runtime 启动期内部错误，不对插件暴露）。
+
+> 这样既满足"系统 UI 是基于框架的插件"，又保证 System 层不被普通插件冒用。
+
+### 4.2 Runtime 侧最小契约（仅授予系统插件）
+
+这是 Runtime 中**唯一**与系统 UI 相关的代码，且全部 gated 在 `runtime.systemLayer` capability 之后。
+
+#### 4.2.1 LayerSystem：System 层槽位
+
+| 层级 | z-index | 可见性 | 输入行为 | 来源 |
+|------|---------|--------|----------|------|
+| HUD | 100-199 | 始终可见 | `pointer-events:none` | 普通插件 iframe |
+| Panel | 200-299 | 按需切换 | 互斥 + 焦点 | 普通插件 iframe |
+| Overlay | 300-399 | 栈式弹出 | 遮罩 | 普通插件 iframe |
+| **System** | **400-499** | **常驻全屏** | **默认 `pointer-events:none`；对话框期间由插件请求焦点** | **`reui-system` iframe** |
 
 ```typescript
+// runtime/src/layer-system.ts（扩展）
+export type LayerType = 'hud' | 'panel' | 'overlay' | 'system';
+
 class LayerSystem {
-  // … 现有字段
-  private systemLayer: HTMLDivElement;  // z-index 400-499 容器
+  /** 仅在加载 kind:'system' 插件时调用一次：把系统插件 iframe 挂入全屏置顶 system 槽位 */
+  mountSystemPlugin(iframe: HTMLIFrameElement): void;
 
-  /** 由 SystemUIService 在初始化时调用一次，将其根 DOM 节点挂入 system 层 */
-  mountSystemRoot(root: HTMLElement): void;
-
-  /** 进入"对话框"焦点模式：dialog/prompt/confirm 弹出时调用 */
+  /** 进入焦点模式（confirm/prompt 等需要键鼠时）。仅持 runtime.systemLayer 的插件可触发 */
   acquireSystemFocus(): void;
 
-  /** 离开焦点模式：所有系统对话框关闭后调用 */
+  /** 退出焦点模式，按归还策略恢复焦点 */
   releaseSystemFocus(): void;
 }
 ```
 
-**焦点策略：**
+**焦点归还策略**（与 v1 一致，保留）：`releaseSystemFocus()` 后 —— Overlay 栈非空则焦点留 Overlay；否则 Panel active 则留 Panel；否则 `SetNuiFocusInput(false,false)` 还给游戏。
 
-- 当 SystemUIService 弹出 `dialog / confirm / alert / prompt` 时，调用 `acquireSystemFocus()`：
-  - 设置 system 层 `pointer-events: auto`；
-  - 调用 NuiBridge `setCursorVisible(true)` 与 FiveM `SetNuiFocusInput(true, true)`；
-  - **不影响**底下 Panel / Overlay 的 z-index 与栈状态——系统层只是覆盖在最上层。
-- 关闭最后一个对话框后调用 `releaseSystemFocus()`：
-  - 还原 system 层 `pointer-events: none`；
-  - 焦点归还策略：
-    - 若 Overlay 栈非空，焦点保持在 Overlay 层；
-    - 否则若 Panel 处于 active，焦点保持在 Panel 层；
-    - 否则 `SetNuiFocusInput(false, false)` 归还游戏。
-- `notification / toast` 不调用 `acquireSystemFocus`，始终鼠标穿透。
+#### 4.2.2 焦点仲裁方法（capability 门控）
 
----
+System 插件不能自己调 `SetNuiFocusInput`（那是 Runtime / NUI 的权力）。Runtime 暴露两个**仅对持 `runtime.systemLayer` 的插件**开放的 method（走普通 `reui:request`，由 PostMessageRouter 校验 capability）：
 
-### 4.2 SystemUIService（Runtime 单例）
+| method | params | 行为 | capability |
+|--------|--------|------|------------|
+| `system-layer:acquireFocus` | `void` | `LayerSystem.acquireSystemFocus()` | `runtime.systemLayer` |
+| `system-layer:releaseFocus` | `void` | `LayerSystem.releaseSystemFocus()` | `runtime.systemLayer` |
+
+> 普通插件即便伪造这两个 method 也会因缺 `runtime.systemLayer` 被 `CAPABILITY_DENIED` 拒绝。
+
+#### 4.2.3 生命周期事件转发
+
+系统插件需要在"某个调用方插件卸载 / 崩溃"时，清理它名下尚未关闭的对话框（失主清理）。Runtime 通过 EventBus（RFC-003）向**持 `runtime.systemLayer` 的插件**额外推送：
+
+| event | payload | 时机 |
+|-------|---------|------|
+| `runtime:plugin:unloaded` | `{ pluginId }` | PluginManager 卸载某插件后 |
+| `runtime:plugin:crashed` | `{ pluginId }` | heartbeat 超时判定崩溃后 |
+
+系统插件订阅这两个事件 → 调用内部 `dismissAllForCaller(pluginId)`。普通插件**无权**订阅 `runtime:plugin:*`（EventBus 在 `subscribeForPlugin` 时校验 capability）。
+
+### 4.3 系统插件导出的方法与类型（`@expose`）
+
+以下类型是**本 RFC 冻结的对外契约**；其实现（含 UI）在 `reui-system` 插件内、后续用 framework 完成。
 
 ```typescript
-// runtime/src/services/system-ui.ts
-
+// reui-system/src/exports.ts（契约；UI 后续实现）
 export type NotificationLevel = 'info' | 'success' | 'warning' | 'danger';
 
 export interface NotifyParams {
-  message: string;                    // 必填
+  message: string;                                 // 必填
   title?: string;
-  level?: NotificationLevel;          // 默认 'info'
-  duration?: number;                  // 单位 ms，默认 4000；0 = 不自动消失
-  icon?: string;                      // 图标 key（由主题预定义）
-  action?: { label: string; eventName: string };  // 可选行动按钮，点击后通过 EventBus 推送
+  level?: NotificationLevel;                        // 默认 'info'
+  duration?: number;                               // ms，默认 4000；0 = 不自动消失
+  icon?: string;                                   // 主题预定义 key
+  action?: { label: string; eventName: string };  // 可选行动按钮
 }
-
-export interface DialogParams {
-  title?: string;
-  message: string;
-  level?: NotificationLevel;          // 默认 'info'
-  okText?: string;                    // 默认 "确定"
-  cancelText?: string;                // 默认 "取消"
-  dismissible?: boolean;              // 默认 true，false 时点击遮罩/ESC 不关闭
-}
-
+export interface ToastParams  { message: string; level?: NotificationLevel; duration?: number; } // duration 默认 2000
+export interface DialogParams { title?: string; message: string; level?: NotificationLevel;
+                                okText?: string; cancelText?: string; dismissible?: boolean; }     // dismissible 默认 true
 export interface PromptParams extends DialogParams {
-  defaultValue?: string;
-  placeholder?: string;
-  maxLength?: number;                 // 默认 200
-  inputType?: 'text' | 'password';    // 默认 'text'
+  defaultValue?: string; placeholder?: string; maxLength?: number; inputType?: 'text' | 'password';
 }
 
-export interface ToastParams {
-  message: string;
-  level?: NotificationLevel;          // 默认 'info'
-  duration?: number;                  // 默认 2000ms
-}
+// 导出方法签名（由 @expose 注册到 ExportRegistry）
+export class SystemUIExports {
+  @expose({ requirePermissions: ['runtime.notification'] })
+  notify(p: NotifyParams): { id: string };               // 立即返回 id
 
-interface ActiveItem {
-  id: string;                         // SystemUIService 内部 uid
-  pluginId: string;                   // 触发该 UI 的插件
-  kind: 'notify' | 'toast' | 'dialog';
-}
+  @expose({ requirePermissions: ['runtime.notification'] })
+  toast(p: ToastParams): void;                           // fire-and-forget
 
-export class SystemUIService {
-  private static instance: SystemUIService;
-  private notifQueue: ActiveItem[] = [];     // 通知队列（最多同时 5 条）
-  private dialogStack: ActiveItem[] = [];    // 对话框栈（modal，互斥显示）
-  private layerSystem: LayerSystem;
-  private eventBus: EventBus;
+  @expose({ requirePermissions: ['runtime.notification'] })
+  dismiss(id: string): { dismissed: boolean };           // 仅能关闭调用方自己发起的 id
 
-  static getInstance(): SystemUIService;
+  @expose({ requirePermissions: ['runtime.dialog'] })
+  alert(p: DialogParams): Promise<void>;
 
-  // ─── 通知（fire-and-forget，立即 resolve） ───
-  notify(pluginId: string, params: NotifyParams): { id: string };
+  @expose({ requirePermissions: ['runtime.dialog'] })
+  confirm(p: DialogParams): Promise<{ ok: boolean }>;
 
-  // ─── 轻提示 ───
-  toast(pluginId: string, params: ToastParams): void;
-
-  // ─── 对话框（async，等待用户操作） ───
-  alert(pluginId: string, params: DialogParams): Promise<void>;
-  confirm(pluginId: string, params: DialogParams): Promise<boolean>;
-  prompt(pluginId: string, params: PromptParams): Promise<string | null>;
-
-  // ─── 主动关闭（如插件取消、热重载、卸载等） ───
-  dismiss(id: string): boolean;                 // 关闭单条通知/对话框
-  dismissAllForPlugin(pluginId: string): void;  // 插件卸载时清理（PluginManager 调用）
-
-  // ─── 用户行为事件（推送给 EventBus） ───
-  // 'system:notification:action' 当 notify 含 action 且用户点击时
-  // 'system:notification:dismissed' 用户手动关闭时
+  @expose({ requirePermissions: ['runtime.dialog'] })
+  prompt(p: PromptParams): Promise<{ value: string | null }>;
 }
 ```
 
-**实现关键点：**
+**权限模型（用 RFC-007 `requirePermissions` 而非 v1 的 PostMessageRouter 直检）：**
 
-| 点 | 行为 |
-|----|------|
-| 通知队列 | 同时最多展示 5 条 notification（自上而下堆叠），超出排队等待。`duration: 0` 的通知不计入超时但仍占据一个槽位 |
-| 对话框栈 | `dialog/confirm/alert/prompt` 同一时刻**只显示栈顶一个**，后续请求排队。栈顶关闭后弹出下一个 |
-| 用户取消 | `confirm` 用户点取消 → resolve `false`；`prompt` 用户取消 → resolve `null`；`alert` 用户关闭 → resolve `void` |
-| 强制关闭（dismissAllForPlugin） | 进行中的 dialog/confirm/prompt 触发 `DIALOG_DISMISSED` 错误响应，让插件的 `await confirm()` 抛 `ReUIError(DIALOG_DISMISSED)` |
-| 重复防抖 | 同一插件 1 秒内重复发送相同 `notify` 内容自动合并（仅刷新存在的那条的 duration） |
-| 跨插件隔离 | 每条系统 UI 都关联 `pluginId`，PluginManager 在卸载插件时调用 `dismissAllForPlugin` |
+| capability（调用方需声明） | 可调用的导出方法 |
+|---|---|
+| `runtime.notification` | `notify` / `toast` / `dismiss` |
+| `runtime.dialog` | `alert` / `confirm` / `prompt` |
 
-#### 4.2.1 对话框渲染策略（Phase A vs Phase B）
+- 调用方还必须持 RFC-007 的 `exports.call`（调用任意导出的基础权限）。
+- ExportRegistry 在转发前用调用方的 `permissions` 校验 `requirePermissions`，不满足 → `CAPABILITY_DENIED`（门槛由**被调用方**设定，无需信任调用方自己的声明）。
+- `runtime.dialog` 视为高权限，CLI `reui sign` 对声明它的插件标记"高权限"（RFC-005）。
+- **调用方与失主归属**：ExportRegistry 转发时携带 `callerPluginId`（RFC-007 §4.1）；系统插件据此记录每条 UI 的 owner，用于 `dismiss` 归属校验与失主清理。Lua 调用方 owner 记为 `'__lua'`。
 
-| 方案 | 说明 | 取舍 |
+### 4.4 调用机制（复用 RFC-007，无新增协议）
+
+#### 4.4.1 转发链路
+
+```
+调用方 core.system.confirm('删除?')
+  → client.request('exports:invoke', { target:'reui-system', method:'confirm', args:[{message:'删除?'}] })
+  → PostMessageRouter → ExportRegistry.invoke(caller, 'reui-system', 'confirm', args)
+  → ExportRegistry 校验 confirm.requirePermissions(['runtime.dialog']) ⊆ caller.permissions
+  → 重打包为 exports:__dispatch 转发到 reui-system iframe（RFC-007 §4.1）
+  → reui-system 渲染对话框 + system-layer:acquireFocus
+  → 用户点确定 → 方法 resolve { ok:true } → 原路返回调用方
+```
+
+#### 4.4.2 推送事件（notify 的 action / dismissed 回调）
+
+notify 的 `action` 点击与关闭回调，**不再走专用 `system:*` push**，而是由系统插件用 RFC-003 EventBus 推送给**发起插件**。约定事件名（命名空间归系统插件所有）：
+
+| event | payload | 时机 |
+|-------|---------|------|
+| `reui-system:notification:action` | `{ id, eventName }` | notify 含 action 且用户点击（仅发起插件可见） |
+| `reui-system:notification:dismissed` | `{ id, reason: 'auto'\|'user'\|'plugin' }` | notify 关闭（仅发起插件可见） |
+
+> 系统插件只向"该通知的 owner 插件"定向推送（按 §4.3 记录的 owner 过滤），不广播。
+
+#### 4.4.3 错误码（在 RFC-001/007 基础上新增）
+
+| Code | 含义 | 触发 |
 |------|------|------|
-| **Phase A：原生 DOM + SCSS** | Runtime 直接 `document.createElement` 渲染对话框、通知、Toast，使用 `@reui/framework` 已有的 Design Token CSS 变量 | ✅ 零额外依赖、体积最小、最稳定<br>❌ 视觉与 framework 组件可能微小差异 |
-| **Phase B：Runtime 预加载 framework** | Runtime 内嵌 React + `@reui/framework`，将 `Dialog/Notification` 渲染到 system 层 | ✅ 视觉完全统一<br>❌ Runtime 强依赖 React |
+| `DIALOG_DISMISSED` | 对话框被外部强制关闭 | 调用方卸载 / 崩溃 / 系统插件重载，致进行中的 alert/confirm/prompt 被迫中止 |
+| `SYSTEM_BUSY` | 系统 UI 繁忙 | dialogStack 超过上限（>8）时拒绝新对话框 |
+| `SYSTEM_UNAVAILABLE` | 系统插件不可用 | `reui-system` 未加载 / 崩溃 / 未注册（由 RFC-007 的 `PLUGIN_NOT_LOADED` 归一化而来） |
 
-**默认采用 Phase A**。Phase B 作为后续可选优化，**对外接口不变**，由 SystemUIService 内部决定实现方式。
+- `confirm` 用户点取消 = 正常返回 `{ok:false}`，**非错误**；`prompt` 取消 = `{value:null}`。
+- 纯插件模型下**无兜底**：系统插件不在线时所有调用返回 `SYSTEM_UNAVAILABLE`，调用方应静默降级（见 §4.7 示例）。
 
----
+### 4.5 `@reui/core` 的 `system` 薄包装
 
-### 4.3 协议扩展（在 RFC-001 method 注册表上新增）
-
-#### 4.3.1 新增 method（`system:*`）
-
-| method | params | response | 是否需要响应 | 错误码 |
-|--------|--------|----------|------|--------|
-| `system:notify` | `NotifyParams` | `{ id: string }` | 是（立即返回 id） | `INVALID_PARAMS` |
-| `system:toast` | `ToastParams` | `void` | 否（fire-and-forget，使用 `reui:notify`） | — |
-| `system:alert` | `DialogParams` | `void`（用户关闭后 resolve） | 是（异步） | `DIALOG_DISMISSED`, `SYSTEM_BUSY` |
-| `system:confirm` | `DialogParams` | `{ ok: boolean }` | 是（异步） | `DIALOG_DISMISSED`, `SYSTEM_BUSY` |
-| `system:prompt` | `PromptParams` | `{ value: string \| null }` | 是（异步） | `DIALOG_DISMISSED`, `SYSTEM_BUSY` |
-| `system:dismiss` | `{ id: string }` | `{ dismissed: boolean }` | 是 | — |
-
-**说明：**
-
-- `system:notify` 立即返回 `id` 给调用方，方便后续 `system:dismiss` 主动关闭（如 long-running 任务进度通知）。
-- `system:toast` 使用 `reui:notify`（fire-and-forget）通道发送，不占用 request id；这是与现有协议（RFC-001 §3.1）一致的"通知"语义。
-- `confirm` 的 `cancel` 视为正常返回 `{ok: false}`，**不产生错误**；只有外部强制关闭（插件卸载、热重载、`dismissAllForPlugin`）才返回 `DIALOG_DISMISSED` 错误。
-
-#### 4.3.2 新增推送事件（`system:*`，走 SystemEventRegistry）
-
-| event | payload | 触发时机 |
-|-------|---------|----------|
-| `system:notification:action` | `{ id, eventName }` | notify 含 action 且用户点击其按钮时（仅推送给发起插件） |
-| `system:notification:dismissed` | `{ id, reason: 'auto' \| 'user' \| 'plugin' }` | notify 关闭时（仅推送给发起插件） |
-
-**事件分发与 RFC-003 §3.5 一致：** `system:` 命名空间纳入 `SystemEventRegistry`，PostMessageRouter 在 `event:subscribe` 路由时增加 `case 'system'` 分支。
-
-#### 4.3.3 错误码扩展
-
-在 RFC-001 §4.2 的基础上新增：
-
-| Code | 含义 | 触发条件 |
-|------|------|----------|
-| `DIALOG_DISMISSED` | 对话框被外部强制关闭 | 插件卸载 / 热重载 / 主动 `dismiss` 进行中的 dialog |
-| `SYSTEM_BUSY` | 系统 UI 服务繁忙 | 超过队列上限（如 dialogStack 长度 > 8）时拒绝新请求 |
-
-#### 4.3.4 capability（在 RFC-002 §3.1.1 permissions 列表上新增）
-
-| capability | 允许调用的 method |
-|------------|-------------------|
-| `runtime.notification` | `system:notify`、`system:toast`、`system:dismiss`（仅自身发起的 id） |
-| `runtime.dialog` | `system:alert`、`system:confirm`、`system:prompt` |
-| `runtime.all` | 上述全部（已存在，无需变更） |
-
-**默认策略：** 普通 HUD/Panel 插件应**显式声明** `runtime.notification` 才能调用 toast/notify；`runtime.dialog` 属于较强权限，建议仅授予明确需要的插件，CLI 在 `reui sign` 时对包含 `runtime.dialog` 的插件标记为"高权限"（参考 RFC-005）。
-
----
-
-### 4.4 PostMessageRouter 集成
-
-按 RFC-001 §3.3 的 handler 注册模式扩展：
-
-```typescript
-// runtime/src/router/system-handlers.ts
-import { SystemUIService } from '../services/system-ui';
-import { ReUIError, ErrorCode } from '../errors';
-
-export function registerSystemHandlers(router: PostMessageRouter): void {
-  const svc = SystemUIService.getInstance();
-
-  router.registerHandler('system:notify', (plugin, msg) => {
-    requireCapability(plugin, 'runtime.notification', msg);
-    const { id } = svc.notify(plugin.id, msg.params as NotifyParams);
-    router.sendSuccess(plugin, msg.id, { id });
-  });
-
-  router.registerHandler('system:toast', (plugin, msg) => {
-    requireCapability(plugin, 'runtime.notification', msg);
-    svc.toast(plugin.id, msg.params as ToastParams);
-    // toast 通过 reui:notify 进入，无需响应
-  });
-
-  router.registerHandler('system:alert', async (plugin, msg) => {
-    requireCapability(plugin, 'runtime.dialog', msg);
-    try {
-      await svc.alert(plugin.id, msg.params as DialogParams);
-      router.sendSuccess(plugin, msg.id, undefined);
-    } catch (err) {
-      router.sendError(plugin, msg.id, toErrorPayload(err));
-    }
-  });
-
-  router.registerHandler('system:confirm', async (plugin, msg) => {
-    requireCapability(plugin, 'runtime.dialog', msg);
-    try {
-      const ok = await svc.confirm(plugin.id, msg.params as DialogParams);
-      router.sendSuccess(plugin, msg.id, { ok });
-    } catch (err) {
-      router.sendError(plugin, msg.id, toErrorPayload(err));
-    }
-  });
-
-  router.registerHandler('system:prompt', async (plugin, msg) => {
-    requireCapability(plugin, 'runtime.dialog', msg);
-    try {
-      const value = await svc.prompt(plugin.id, msg.params as PromptParams);
-      router.sendSuccess(plugin, msg.id, { value });
-    } catch (err) {
-      router.sendError(plugin, msg.id, toErrorPayload(err));
-    }
-  });
-
-  router.registerHandler('system:dismiss', (plugin, msg) => {
-    // 不要求 capability：插件总能关闭自己发起的 UI
-    // SystemUIService 内部校验 id 归属
-    const { id } = msg.params as { id: string };
-    if (!svc.belongsTo(id, plugin.id)) {
-      router.sendError(plugin, msg.id, {
-        code: ErrorCode.PERMISSION_DENIED,
-        message: 'Cannot dismiss UI item owned by another plugin',
-      });
-      return;
-    }
-    const dismissed = svc.dismiss(id);
-    router.sendSuccess(plugin, msg.id, { dismissed });
-  });
-}
-```
-
-**`event:subscribe` 路由扩展（RFC-003 §3.5.2）：** 增加 `case 'system'` 分支，调用 `systemEventRegistry.register(plugin.id, event)` 并由 SystemUIService 在内部触发时仅推送给对应 `pluginId` 的 iframe。
-
----
-
-### 4.5 PluginManager 集成
-
-按 RFC-002 §3.4 的生命周期扩展：
-
-```typescript
-// runtime/src/plugin/manager.ts (片段)
-
-async unload(pluginId: string, reason: UnloadReason): Promise<void> {
-  // … 现有逻辑：通知 plugin:beforeUnload、保存状态、销毁 iframe
-
-  // 新增：清理该插件的所有系统 UI
-  SystemUIService.getInstance().dismissAllForPlugin(pluginId);
-
-  // … 现有逻辑：清理 EventBus、HeartbeatMonitor、订阅
-}
-```
-
-**插件崩溃（heartbeat 超时）触发 `plugin:crashed` 时同样调用 `dismissAllForPlugin`。**
-
----
-
-### 4.6 @reui/core SDK 模块
+core 不直连任何 `system:*`，而是**封装 `exports:invoke`**，给调用方一套好用的类型化 API：
 
 ```typescript
 // @reui/core/src/system.ts
-
 import { Client } from './client';
 
-export type NotificationLevel = 'info' | 'success' | 'warning' | 'danger';
-
-export interface NotifyOptions {
-  title?: string;
-  level?: NotificationLevel;
-  duration?: number;          // 0 = 不自动消失
-  icon?: string;
-  action?: { label: string; eventName: string };
-}
-
-export interface DialogOptions {
-  title?: string;
-  level?: NotificationLevel;
-  okText?: string;
-  cancelText?: string;
-  dismissible?: boolean;
-}
-
-export interface PromptOptions extends DialogOptions {
-  defaultValue?: string;
-  placeholder?: string;
-  maxLength?: number;
-  inputType?: 'text' | 'password';
-}
-
-export interface ToastOptions {
-  level?: NotificationLevel;
-  duration?: number;
-}
-
-export interface NotificationHandle {
-  /** 系统级 id，可用于后续 dismiss 或匹配 action 事件 */
-  id: string;
-  /** 主动关闭该通知 */
-  dismiss(): Promise<void>;
-}
+const TARGET = 'reui-system';
 
 export class ReUISystem {
-  private client: Client;
-  constructor(client: Client) { this.client = client; }
+  constructor(private client: Client) {}
 
-  /**
-   * 推送一条全局通知（顶部堆叠，自动消失）
-   * @example
-   * const n = await system.notify('已保存', { level: 'success' });
-   * // long-running 任务结束后主动关闭：
-   * await n.dismiss();
-   */
+  private invoke<T>(method: string, params: unknown): Promise<T> {
+    return this.client
+      .request<T>('exports:invoke', { target: TARGET, method, args: [params] })
+      .catch((err) => { throw normalizeSystemError(err); }); // PLUGIN_NOT_LOADED → SYSTEM_UNAVAILABLE
+  }
+
   async notify(message: string, options?: NotifyOptions): Promise<NotificationHandle> {
-    const { id } = await this.client.request<{ id: string }>('system:notify', {
-      message, ...options,
-    });
-    return {
-      id,
-      dismiss: () => this.client.request('system:dismiss', { id }).then(() => undefined),
-    };
+    const { id } = await this.invoke<{ id: string }>('notify', { message, ...options });
+    return { id, dismiss: () => this.invoke('dismiss', id).then(() => undefined) };
   }
 
-  /**
-   * 轻提示（fire-and-forget，不等待响应）
-   * @example system.toast('已复制');
-   */
   toast(message: string, options?: ToastOptions): void {
-    // 使用 client.notify（reui:notify）而非 request
-    this.client.notify('system:toast', { message, ...options });
+    // fire-and-forget：用 client.notify 转发，不等响应
+    this.client.notify('exports:invoke', { target: TARGET, method: 'toast', args: [{ message, ...options }] });
   }
 
-  /**
-   * 弹出告警对话框，等待用户关闭
-   * @example await system.alert('保存失败：网络异常');
-   */
   async alert(message: string, options?: DialogOptions): Promise<void> {
-    await this.client.request('system:alert', { message, ...options });
+    await this.invoke('alert', { message, ...options });
   }
-
-  /**
-   * 弹出确认对话框
-   * @returns 用户点确定 → true；用户点取消 → false；外部强制关闭 → 抛 ReUIError(DIALOG_DISMISSED)
-   * @example
-   * const ok = await system.confirm('确定删除？', { level: 'danger' });
-   * if (!ok) return;
-   */
   async confirm(message: string, options?: DialogOptions): Promise<boolean> {
-    const { ok } = await this.client.request<{ ok: boolean }>('system:confirm', {
-      message, ...options,
-    });
-    return ok;
+    return (await this.invoke<{ ok: boolean }>('confirm', { message, ...options })).ok;
   }
-
-  /**
-   * 弹出文本输入对话框
-   * @returns 用户提交 → string；用户取消 → null；外部强制关闭 → 抛 ReUIError(DIALOG_DISMISSED)
-   * @example const name = await system.prompt('请输入新名称');
-   */
   async prompt(message: string, options?: PromptOptions): Promise<string | null> {
-    const { value } = await this.client.request<{ value: string | null }>(
-      'system:prompt', { message, ...options }
-    );
-    return value;
+    return (await this.invoke<{ value: string | null }>('prompt', { message, ...options })).value;
   }
 
-  /**
-   * 监听 notify 中 action 按钮点击
-   * @example
-   * system.onNotificationAction(({ id, eventName }) => { ... });
-   */
-  onNotificationAction(handler: (data: { id: string; eventName: string }) => void) {
-    return this.client.onPush('system:notification:action', handler as any);
+  onNotificationAction(handler: (d: { id: string; eventName: string }) => void) {
+    return this.client.onPush('reui-system:notification:action', handler as any);
   }
-
-  /**
-   * 监听通知关闭（自动消失 / 用户关闭 / 外部强制关闭）
-   */
-  onNotificationDismissed(
-    handler: (data: { id: string; reason: 'auto' | 'user' | 'plugin' }) => void
-  ) {
-    return this.client.onPush('system:notification:dismissed', handler as any);
+  onNotificationDismissed(handler: (d: { id: string; reason: 'auto'|'user'|'plugin' }) => void) {
+    return this.client.onPush('reui-system:notification:dismissed', handler as any);
   }
 }
 ```
 
-**导出方式（在 `@reui/core/src/index.ts` 追加，参考 RFC-003 §5.1）：**
+**导出（`@reui/core/src/index.ts` 追加）：**
 
 ```typescript
 import { ReUISystem } from './system';
-// …
 export const system = new ReUISystem(client);
-export type { NotificationLevel, NotifyOptions, DialogOptions, PromptOptions,
-              ToastOptions, NotificationHandle } from './system';
+export type { NotificationLevel, NotifyOptions, DialogOptions, PromptOptions, ToastOptions, NotificationHandle } from './system';
 ```
 
-> **体积影响：** 整个 `system.ts` 模块 < 1.5 KB（minified），不引入任何 DOM/UI 框架，对 RFC-001 §7.2 的 `< 10KB gzipped` 目标无威胁。
+> **体积：** `system.ts` 仅是若干 `exports:invoke` 转发 + 类型，< 1.5 KB（minified），无 DOM/框架依赖，对 `< 10KB gzipped`（RFC-001 §7.2）无威胁。
 
----
+### 4.6 Lua 接口（需求 #4）
 
-### 4.7 SDK 使用示例
+#### 4.6.1 基础形态：直接走 RFC-007 桥
+
+无需任何新桥，复用 RFC-007 §4.6 的 `exports.reui:invokePlugin`：
+
+```lua
+-- 通知
+exports.reui:invokePlugin('reui-system', 'notify',
+  { { message = '已保存', level = 'success' } },
+  function(err, res) if not err then print('notify id =', res.id) end end)
+
+-- 确认（拿到布尔结果）
+exports.reui:invokePlugin('reui-system', 'confirm',
+  { { message = '确认购买该物品?', level = 'warning', okText = '购买', cancelText = '取消' } },
+  function(err, res)
+    if err then return end          -- err.code 可能为 SYSTEM_UNAVAILABLE / DIALOG_DISMISSED
+    if res.ok then doPurchase() end
+  end)
+```
+
+**Lua 侧权限（RFC-007 §4.6）：** Lua 调用方记为受信 caller `'__lua'`，默认拥有 `exports.call.*`；但系统插件在 `@expose` 上声明的 `requirePermissions`（`runtime.notification` / `runtime.dialog`）**对 Lua 同样强制**——即系统插件可对 Lua 也设门槛（`'__lua'` 的权限集由桥 resource 的 convar 配置，默认含二者）。
+
+#### 4.6.2 可选语法糖 resource
+
+为贴近 FiveM 习惯，`reui-system` 可附带一个轻量 Lua 导出层，封装上面的样板：
+
+```lua
+-- 由 reui-system 自带桥提供（可选）
+exports.reui:notify('已保存', 'success')                 -- 等价 invokePlugin('reui-system','notify',...)
+exports.reui:toast('已复制')
+exports.reui:confirm('确认购买?', function(ok) if ok then doPurchase() end end)
+exports.reui:prompt('输入新名称', function(value) if value then rename(value) end end)
+```
+
+> 语法糖纯属便利层，**契约真相源仍是 §4.3 的方法签名**；语法糖内部一律转调 `invokePlugin('reui-system', ...)`。
+
+### 4.7 行为语义（保留 v1 的好设计，执行者改为系统插件）
+
+| 点 | 行为 |
+|----|------|
+| 通知队列 | 同时最多 5 条，自上而下堆叠，超出排队；`duration:0` 不超时但占槽 |
+| 对话框栈 | `alert/confirm/prompt` 同一时刻只显示栈顶一个，后续排队；栈顶关闭弹下一个 |
+| 用户取消 | `confirm`→`{ok:false}`；`prompt`→`{value:null}`；`alert`→`void`；**均非错误** |
+| 失主清理 | 系统插件订阅 `runtime:plugin:unloaded/crashed`，对该 owner 进行中的 dialog 以 `DIALOG_DISMISSED` 中止、移除其全部通知 |
+| 重复防抖 | 同一 owner 1s 内重复相同 `notify` 内容 → 仅刷新已存在那条的 duration |
+| dismiss 归属 | `dismiss(id)` 仅能关闭调用方自己 owner 的 id；跨插件 → `PERMISSION_DENIED` |
+| XSS | 渲染 `message/title/placeholder` **一律 `textContent`，禁止 HTML 解析**（系统插件实现的硬约束） |
+| 焦点 | `alert/confirm/prompt` 弹出时 `system-layer:acquireFocus`，全部关闭后 `releaseFocus`；`notify/toast` 不夺焦点 |
+| 文本上限 | `message` 超 800 字符自动截断加省略号，避免覆盖整屏 |
+
+### 4.8 调用方使用示例
 
 ```typescript
-import { init, system } from '@reui/core';
-
+import { init, system, ReUIError, ErrorCode } from '@reui/core';
 await init();
 
-// ── 1. 简单提示 ──
-system.toast('已保存');
+system.toast('已保存');                                    // 轻提示
 
-// ── 2. 全局通知（带 action） ──
-const handle = await system.notify('您有 3 条新消息', {
-  level: 'info',
-  duration: 0,                                       // 不自动消失
-  action: { label: '查看', eventName: 'open-mail' },
+const handle = await system.notify('您有 3 条新消息', {     // 带 action 的常驻通知
+  level: 'info', duration: 0, action: { label: '查看', eventName: 'open-mail' },
 });
-system.onNotificationAction(({ eventName }) => {
-  if (eventName === 'open-mail') openMailbox();
-});
-// long-running 任务结束后：
-await handle.dismiss();
+system.onNotificationAction(({ eventName }) => { if (eventName === 'open-mail') openMailbox(); });
+await handle.dismiss();                                    // 任务结束主动关闭
 
-// ── 3. 确认对话框 ──
-const ok = await system.confirm('确定要删除该物品吗？', {
-  level: 'danger',
-  okText: '删除',
-  cancelText: '保留',
-});
+const ok = await system.confirm('确定删除该物品?', { level: 'danger', okText: '删除' });
 if (ok) await api.delete(itemId);
 
-// ── 4. 输入对话框 ──
-const newName = await system.prompt('请输入新角色名', {
-  defaultValue: currentName,
-  maxLength: 32,
-});
-if (newName !== null) await api.rename(newName);
+const name = await system.prompt('请输入新角色名', { defaultValue: cur, maxLength: 32 });
+if (name !== null) await api.rename(name);
 
-// ── 5. 处理强制关闭（插件热重载时的 in-flight dialog） ──
-import { ReUIError, ErrorCode } from '@reui/core';
+// 纯插件模型：系统插件不在线时的降级
 try {
-  await system.confirm('提交？');
+  await system.confirm('提交?');
 } catch (err) {
-  if (err instanceof ReUIError && err.code === ErrorCode.DIALOG_DISMISSED) {
-    // 静默忽略：插件正在卸载
-    return;
-  }
+  if (err instanceof ReUIError && err.code === ErrorCode.SYSTEM_UNAVAILABLE) { console.warn('系统 UI 未就绪'); return; }
+  if (err instanceof ReUIError && err.code === ErrorCode.DIALOG_DISMISSED) return; // 本插件正在卸载
   throw err;
 }
 ```
@@ -595,109 +434,94 @@ try {
 
 ## 5. 安全考量
 
-### 5.1 capability 强制检查
+### 5.1 权限分层
 
-| 调用 | 必需 capability | PostMessageRouter 检查时机 |
-|------|----------------|----------------------------|
-| `system:notify` / `system:toast` | `runtime.notification` 或 `runtime.all` | 每次请求 |
-| `system:alert` / `system:confirm` / `system:prompt` | `runtime.dialog` 或 `runtime.all` | 每次请求 |
-| `system:dismiss` | 无 capability，但 SystemUIService 内部校验 `id` 归属插件 | 每次请求 |
-
-未声明 capability 的调用返回 `CAPABILITY_DENIED`（RFC-001 §4.2）。
+| 主体 | 所需 capability | 校验方 |
+|------|----------------|--------|
+| 系统插件 `reui-system` | `runtime.systemLayer` + `exports.expose`，且 `kind:'system'` + 受信签名 | RFC-002 Schema + RFC-005 签名 + PostMessageRouter |
+| 调用 notify/toast | `exports.call` + `runtime.notification` | ExportRegistry（`requirePermissions`） |
+| 调用 alert/confirm/prompt | `exports.call` + `runtime.dialog` | ExportRegistry（`requirePermissions`） |
+| Lua 调用 | `'__lua'` 受信，权限由桥 convar 配置 | RFC-007 桥 + ExportRegistry |
 
 ### 5.2 防滥用
 
 | 风险 | 防护 |
 |------|------|
-| 插件高频弹通知刷屏 | 同一插件 1s 内重复内容自动合并；通知队列上限 5 条；超出排队 |
-| 插件无限堆叠 dialog | dialog 栈上限 8，超出返回 `SYSTEM_BUSY` |
-| 插件用 dialog 阻塞游戏 | `acquireSystemFocus` 仅影响系统层；可由 Runtime 配置一个全局快捷键（默认 `ESC`）强制 dismiss 栈顶 dialog（仅 `dismissible: true` 的对话框响应） |
-| 插件冒充其他插件关闭 UI | `system:dismiss` 校验 id 归属，跨插件 dismiss 返回 `PERMISSION_DENIED` |
-| 输入数据 XSS | SystemUIService 渲染 `message / title / placeholder` 时**仅以纯文本插入**（`textContent`），禁止 HTML 解析 |
+| 高频刷通知 | 1s 重复合并；队列上限 5，超出排队 |
+| 无限堆 dialog | 栈上限 8，超出 `SYSTEM_BUSY` |
+| dialog 阻塞游戏 | 焦点只影响 system 层；Runtime 可配全局 `ESC` 强制 dismiss 栈顶 `dismissible:true` 对话框 |
+| 冒充他人关闭 UI | `dismiss` 校验 owner，跨插件 `PERMISSION_DENIED` |
+| 普通插件冒占 System 层 / 焦点 | Schema 拒绝普通插件的 `layer:'system'`/`runtime.systemLayer`；焦点 method capability 门控 |
+| XSS | `textContent` 渲染，禁 HTML |
 
-### 5.3 与游戏焦点的交互
+### 5.3 焦点与游戏的交互
 
-`system:confirm` 等需要键鼠输入的对话框弹出时：
-
-1. SystemUIService 调用 `LayerSystem.acquireSystemFocus()`；
-2. LayerSystem 调用 NuiBridge 触发 `SetNuiFocusInput(true, true)`；
-3. 对话框关闭后 `releaseSystemFocus()`，按 §4.1.2 的归还策略恢复焦点。
-
-这保证：即使玩家正在游戏中（无任何 panel/overlay 打开），系统弹出 `confirm` 时也能立即获得键鼠输入；关闭后焦点正确归还游戏。
+`confirm/prompt` 弹出 → 系统插件 `system-layer:acquireFocus` → Runtime `SetNuiFocusInput(true,true)`；关闭 → `releaseFocus` 按 §4.2.1 策略归还。即便玩家在纯游戏态（无 panel/overlay），系统确认框也能立即拿到键鼠，关闭后正确归还。
 
 ---
 
 ## 6. 测试计划
 
-### 6.1 单元测试（SystemUIService）
+### 6.1 系统插件单元测试（导出方法行为）
 
-| 测试用例 | 预期结果 |
-|----------|----------|
-| `notify` 同时插入 6 条 | 5 条立即显示，1 条排队，关闭任意一条后排队的弹出 |
-| 同插件 1s 内重复 `notify` 相同 message | 仅刷新 duration，不创建新条目 |
-| `confirm` 用户点确定 | resolve `true` |
-| `confirm` 用户点取消 | resolve `false`，**无错误抛出** |
-| `prompt` 用户提交空字符串 | resolve `''` |
-| `prompt` 用户取消 | resolve `null` |
-| 进行中的 `confirm` + `dismissAllForPlugin(pluginId)` | reject `ReUIError(DIALOG_DISMISSED)` |
-| dialog 栈达到 8 时再 push | 返回 `SYSTEM_BUSY` |
-| `dismiss(id)` 跨插件调用 | `belongsTo` 返回 false，触发 `PERMISSION_DENIED` |
-| `notify` 含 action 用户点击 | `system:notification:action` 推送到发起插件，含 `id`/`eventName` |
-| `notify` 自动消失 | `system:notification:dismissed` 推送 `reason: 'auto'` |
+| 用例 | 预期 |
+|------|------|
+| `notify` 连插 6 条 | 5 条显示、1 条排队，关闭任一后排队弹出 |
+| 同 owner 1s 内重复 `notify` | 仅刷新 duration，不新建 |
+| `confirm` 确定 / 取消 | `{ok:true}` / `{ok:false}`（取消无错误） |
+| `prompt` 提交空串 / 取消 | `{value:''}` / `{value:null}` |
+| 进行中 `confirm` 遇 owner 卸载 | reject `DIALOG_DISMISSED` |
+| dialogStack 达 8 再 push | `SYSTEM_BUSY` |
+| 跨 owner `dismiss` | `PERMISSION_DENIED` |
+| notify action 点击 / 自动消失 | 定向推送 `...:action` / `...:dismissed(reason:'auto')` |
 
-### 6.2 集成测试
+### 6.2 集成测试（端到端）
 
 | 场景 | 验证点 |
 |------|--------|
-| 子页面 `system.confirm()` → Runtime 渲染对话框 → 用户点确定 → 子页面 await 返回 `true` | 完整 RPC 链路 |
-| 子页面 capability 不含 `runtime.dialog` 调用 `confirm` | reject `CAPABILITY_DENIED`，UI 未弹出 |
-| 插件热重载（unload + reload）时进行中的 `prompt` | 旧调用 reject `DIALOG_DISMISSED`，新插件起来后能正常调用 |
-| 插件崩溃（heartbeat 超时）时进行中的 `confirm` | 自动 `dismissAllForPlugin`，对话框消失，插件状态进入 `error` |
-| 系统 dialog 弹出 → `SetNuiFocusInput(true)` → 关闭 → 焦点正确归还（无 overlay/panel 时归还游戏） | LayerSystem 焦点归还策略 |
-| 通知含 action 用户点击 → `system:notification:action` 仅发到发起插件，其他插件不收到 | SystemEventRegistry 隔离 |
+| 调用方 `core.system.confirm()` → 经 ExportRegistry → 系统插件渲染 → 用户确定 → 调用方得 `true` | RFC-007 完整链路 |
+| 调用方缺 `runtime.dialog` 调 `confirm` | `CAPABILITY_DENIED`，未弹窗 |
+| `reui-system` 未加载时调用 | `SYSTEM_UNAVAILABLE`（无兜底 UI） |
+| Lua `invokePlugin('reui-system','confirm',...)` | 回调拿到 `ok`，焦点正确切换/归还 |
+| 调用方热重载时其进行中的 `prompt` | 旧调用 `DIALOG_DISMISSED`，重载后可正常再调 |
+| confirm 弹出 → `SetNuiFocusInput(true)` → 关闭 → 焦点归还（无 overlay/panel 时还游戏） | LayerSystem 焦点策略 |
 
-### 6.3 边界测试
+### 6.3 边界
 
-- 1000 字符的 `message`（应被自动截断到 800 字符并加省略号，避免覆盖屏幕）
-- 同一插件并发发起 10 个 `confirm`：栈式排队，按 FIFO 弹出
-- `prompt` 输入 `<script>alert(1)</script>`：textContent 插入，不执行
-- 对话框 `dismissible: false` + 全局 ESC：拒绝关闭
+- 1000 字 `message` → 截断 800 + 省略号。
+- 同 owner 并发 10 个 `confirm` → FIFO 排队。
+- `prompt` 输入 `<script>alert(1)</script>` → `textContent` 插入,不执行。
+- `dismissible:false` + 全局 ESC → 拒绝关闭。
 
 ---
 
 ## 7. 验收标准
 
-### 7.1 功能验收
+### 7.1 契约 / 接口（本 RFC 本期范围）
 
-- [ ] LayerSystem 新增 `system` 层，z-index 400-499，独立于 hud/panel/overlay
-- [ ] `PluginManifest.layer` 的 Schema **不接受** `'system'`
-- [ ] `system:notify / toast / alert / confirm / prompt / dismiss` 六个 method 全部注册到 PostMessageRouter
-- [ ] `runtime.notification` 与 `runtime.dialog` capability 在 PostMessageRouter 正确执行
-- [ ] `confirm` 用户取消返回 `{ok: false}` 而**非**错误
-- [ ] 外部强制 dismiss 进行中的 dialog/prompt 时返回 `DIALOG_DISMISSED` 错误
-- [ ] dialog 栈上限 8，溢出返回 `SYSTEM_BUSY`
-- [ ] 通知队列上限 5，超出排队
-- [ ] PluginManager.unload 调用 `SystemUIService.dismissAllForPlugin(pluginId)`
-- [ ] heartbeat 超时崩溃路径同样调用 `dismissAllForPlugin`
-- [ ] `@reui/core` 导出 `system` 模块，API 类型完整无 `any` 泄漏
-- [ ] `system:notification:action` / `system:notification:dismissed` 仅推送给发起插件
-- [ ] message/title/placeholder 渲染使用 textContent，不解析 HTML
+- [ ] RFC-002 Schema 新增 `kind:'system'`；`layer:'system'` 与 `runtime.systemLayer` 仅对 `kind:'system'` 合法，且要求受信签名
+- [ ] LayerSystem 新增 System 层（z 400-499）+ `mountSystemPlugin/acquireSystemFocus/releaseSystemFocus`
+- [ ] Runtime 暴露 `system-layer:acquireFocus/releaseFocus`，仅 `runtime.systemLayer` 可调
+- [ ] Runtime 向持 `runtime.systemLayer` 的插件推送 `runtime:plugin:unloaded/crashed`
+- [ ] `reui-system` 通过 `@expose` 注册 `notify/toast/alert/confirm/prompt/dismiss`，签名见 §4.3
+- [ ] 权限经 RFC-007 `requirePermissions`（`runtime.notification`/`runtime.dialog`）强制
+- [ ] `@reui/core` 导出 `system` 薄包装,全部转发 `exports:invoke`,类型无 `any` 泄漏
+- [ ] 新增错误码 `DIALOG_DISMISSED` / `SYSTEM_BUSY` / `SYSTEM_UNAVAILABLE`
+- [ ] Lua 经 `exports.reui:invokePlugin('reui-system',...)` 可调；可选语法糖 `exports.reui:notify/confirm/...`
+- [ ] notify action/dismissed 经 EventBus 定向推送给 owner 插件
 
-### 7.2 性能验收
+### 7.2 行为 / 安全
 
-- [ ] `system:toast` 端到端延迟 < 16ms（一帧内显示）
-- [ ] `system:notify` 端到端延迟 < 32ms
-- [ ] `system:confirm` 弹出动画 ≤ 200ms（对齐 `animation.normal`）
-- [ ] 同时存在 5 条通知 + 1 个 dialog 时无掉帧（60fps 维持）
-- [ ] `@reui/core/system` 模块 minified < 1.5 KB；总包体积仍 < 10 KB gzipped
+- [ ] `confirm` 取消返回 `{ok:false}` 而非错误；外部强制关闭才 `DIALOG_DISMISSED`
+- [ ] 队列上限 5 / 栈上限 8（`SYSTEM_BUSY`）
+- [ ] 跨 owner `dismiss` → `PERMISSION_DENIED`
+- [ ] message/title/placeholder 用 `textContent`，HTML 注入无效
+- [ ] 缺 `runtime.notification`/`runtime.dialog` 的调用 → `CAPABILITY_DENIED`
+- [ ] 系统插件不在线 → `SYSTEM_UNAVAILABLE`，**无 Runtime 兜底渲染**
 
-### 7.3 安全验收
+### 7.3 UI（后续阶段，非本 RFC）
 
-- [ ] 无 `runtime.notification` 的插件调用 `system:notify` 收到 `CAPABILITY_DENIED`
-- [ ] 无 `runtime.dialog` 的插件调用 `system:confirm` 收到 `CAPABILITY_DENIED`
-- [ ] 跨插件 `system:dismiss` 收到 `PERMISSION_DENIED`
-- [ ] HTML/script 注入测试无效（仅文本展示）
-- [ ] 焦点归还在所有 corner case（多 overlay 同时存在、panel 切换中弹 dialog 等）下正确
+- [ ] `reui-system` 用 `@reui/framework` 实现 notify/toast/dialog 的渲染、动画、主题（**留待 RFC-004 落地后**）
 
 ---
 
@@ -707,79 +531,82 @@ try {
 
 | RFC | 依赖内容 |
 |------|----------|
-| RFC-001 | `reui:request / response / push / notify` 协议、错误码体系、PostMessageRouter handler 注册 |
-| RFC-002 | LayerSystem（扩展新增 system 层）、PluginManager 卸载钩子、capability 权限模型 |
-| RFC-003 | EventBus（系统事件分发）、SystemEventRegistry（`system:` 命名空间分流）、ReUIError/ErrorCode |
+| RFC-001 | `reui:request/response/push/notify` 协议、错误码体系、PostMessageRouter |
+| RFC-002 | 插件加载 / 签名 / 生命周期；LayerSystem（新增 system 层）；manifest Schema（新增 `kind:'system'`） |
+| RFC-003 | EventBus（notify 回调 + 生命周期事件分发）、`ReUIError`/`ErrorCode` |
+| **RFC-007** | **ExportRegistry / `@expose` / `exports:invoke` / Lua 桥 —— 调用机制的全部基础** |
+
+> **关键：本 RFC 强依赖 RFC-007。** RFC-007 未落地前，本 RFC 无法实现（无调用通道）。建议实现顺序：RFC-007 → RFC-006 →（RFC-004 落地后）系统插件 UI。
 
 ### 8.2 对其他组件的影响
 
 | 组件 | 影响 |
 |------|------|
-| `LayerSystem` | 新增 system 层 + `acquireSystemFocus / releaseSystemFocus` |
-| `PostMessageRouter` | 注册 6 个 handler、`event:subscribe` 增加 `system` 分支 |
-| `PluginManager` | unload / crash 路径调用 `dismissAllForPlugin` |
-| `@reui/core` | 新增 `system` 模块导出，`Client` 增加 `notify(method, params)` 公开方法（用于 toast） |
-| RFC-002 plugin.json Schema | `permissions` 枚举新增 `runtime.notification`、`runtime.dialog`（后者已在 RFC-002 §3.1.1 列出，本 RFC 落实其语义） |
-| RFC-005 CLI（`reui sign`） | `runtime.dialog` 列为高权限，签名时交互确认（与现有 `runtime.all`、`plugins.all` 同级） |
+| RFC-002 Schema | 新增 `kind:'system'`；`layer:'system'`/`runtime.systemLayer` 受 `kind` 与签名约束 |
+| LayerSystem | 新增 system 层 + 焦点仲裁 |
+| PostMessageRouter | 注册 `system-layer:acquireFocus/releaseFocus`（capability 门控） |
+| EventBus | 允许持 `runtime.systemLayer` 的插件订阅 `runtime:plugin:*` |
+| ExportRegistry（RFC-007） | 无需改动，系统插件作为普通导出提供方接入 |
+| `@reui/core` | 新增 `system` 模块（转发 `exports:invoke`） |
+| RFC-005 CLI | `kind:'system'` 要求受信签名；`runtime.dialog` 标记高权限 |
 
 ### 8.3 实现顺序
 
 ```
-1. SystemUIService 单例（DOM 渲染 + 队列/栈管理）— 独立可单测
-2. LayerSystem 扩展 system 层 + 焦点管理
-3. PostMessageRouter 注册 system:* handler + capability 检查
-4. SystemEventRegistry 增加 'system' 命名空间分支
-5. PluginManager.unload / heartbeat 崩溃路径接入 dismissAllForPlugin
-6. @reui/core/system 模块（薄包装）
-7. 集成测试 + 验收清单
+0. （前置）RFC-007 ExportRegistry + Lua 桥落地
+1. RFC-002 Schema 扩展 kind:'system' + 签名约束
+2. LayerSystem system 层槽位 + 焦点仲裁 + capability 门控 method
+3. EventBus 向 runtime.systemLayer 插件转发 plugin 生命周期事件
+4. reui-system 插件骨架：@expose 六方法 + 队列/栈/失主清理/归属逻辑（UI 占位）
+5. @reui/core/system 薄包装 + 错误归一化
+6. Lua 语法糖 resource（可选）
+7. 集成测试 + 验收（§7.1/§7.2）
+8.（后续）reui-system 用 @reui/framework 实现 UI（§7.3）
 ```
 
 ---
 
-## 附录 A：method 速查表（与 RFC-001 §4.1 对齐）
+## 附录 A：导出方法速查（契约真相源）
 
-| method | params | response | capability | 通道 |
-|--------|--------|----------|------------|------|
-| `system:notify` | `NotifyParams` | `{id: string}` | `runtime.notification` | `reui:request` |
-| `system:toast` | `ToastParams` | — | `runtime.notification` | `reui:notify` |
-| `system:alert` | `DialogParams` | `void` | `runtime.dialog` | `reui:request` |
-| `system:confirm` | `DialogParams` | `{ok: boolean}` | `runtime.dialog` | `reui:request` |
-| `system:prompt` | `PromptParams` | `{value: string\|null}` | `runtime.dialog` | `reui:request` |
-| `system:dismiss` | `{id: string}` | `{dismissed: boolean}` | — (内部归属校验) | `reui:request` |
+| 方法 | params | 返回 | requirePermissions | 调用通道 |
+|------|--------|------|--------------------|----------|
+| `notify` | `NotifyParams` | `{id}` | `runtime.notification` | `exports:invoke`（request） |
+| `toast` | `ToastParams` | — | `runtime.notification` | `exports:invoke`（notify, fire-and-forget） |
+| `dismiss` | `id:string` | `{dismissed}` | `runtime.notification`（+owner 校验） | `exports:invoke` |
+| `alert` | `DialogParams` | `void` | `runtime.dialog` | `exports:invoke` |
+| `confirm` | `DialogParams` | `{ok}` | `runtime.dialog` | `exports:invoke` |
+| `prompt` | `PromptParams` | `{value}` | `runtime.dialog` | `exports:invoke` |
 
-## 附录 B：事件速查表（与 RFC-003 §3.5 命名空间一致）
+## 附录 B：事件速查
 
-| SDK API | 实际 event | 路由目标 |
-|---------|-----------|---------|
-| `system.onNotificationAction(...)` | `system:notification:action` | SystemEventRegistry → 仅发起插件 |
-| `system.onNotificationDismissed(...)` | `system:notification:dismissed` | SystemEventRegistry → 仅发起插件 |
+| SDK API | event | 路由 |
+|---------|-------|------|
+| `system.onNotificationAction` | `reui-system:notification:action` | EventBus → 仅 owner 插件 |
+| `system.onNotificationDismissed` | `reui-system:notification:dismissed` | EventBus → 仅 owner 插件 |
+| （系统插件内部订阅） | `runtime:plugin:unloaded` / `runtime:plugin:crashed` | EventBus → 仅 `runtime.systemLayer` 插件 |
 
 ## 附录 C：与 RFC-004 framework 反馈组件的关系
 
-| 维度 | `@reui/framework` `Toast/Dialog/Notification` | `@reui/core` `system.*` |
-|------|-----------------------------------------------|--------------------------|
-| 渲染位置 | iframe **内部**（仅自身可见区域） | Runtime 主文档 system 层（覆盖全屏） |
-| 强制依赖 | 需要引入 framework + React | 仅 `@reui/core`（任何技术栈可用） |
-| 适合场景 | 插件自身界面内的反馈（如表单校验提示） | 跨 iframe / 全屏覆盖 / 系统级提示 |
-| 视觉一致性 | 与 framework 其他组件对齐 | 与 framework 共享 Design Token CSS 变量 |
-| 关闭对其他插件影响 | 无 | 无（每个 UI 项关联 pluginId，独立管理） |
+| 维度 | `@reui/framework` `Toast/Dialog` | `reui-system`（经 `@reui/core/system`） |
+|------|----------------------------------|------------------------------------------|
+| 渲染位置 | 调用插件 iframe **内部** | `reui-system` 全屏置顶 iframe（盖全屏） |
+| 强制依赖 | 引入 framework + React | 仅 `@reui/core` 或 Lua（任意技术栈） |
+| 适合场景 | 插件自身界面内反馈（表单校验等） | 跨插件 / 全屏 / 系统级 / Lua 触发 |
+| 实现关系 | framework 组件 | **`reui-system` 的 UI 正是用这些 framework 组件实现的** |
 
-**最佳实践：**
-- 表单输入校验、loading、局部 toast → `@reui/framework`
-- 跨插件通知、删除确认、系统警告、long-running 任务进度 → `@reui/core/system.*`
-
-## 附录 D：完整消息流示例（system:confirm）
+## 附录 D：完整消息流（confirm，含 RFC-007 转发）
 
 ```
- 1. 插件代码：const ok = await system.confirm('删除？', {level:'danger'});
- 2. ReUISystem.confirm() 调用 client.request('system:confirm', { message:'删除？', level:'danger' })
- 3. Client 生成 id="inventory:42"，发送 reui:request 到 parent
- 4. MessageDispatcher 验证来源 → PostMessageRouter
- 5. PostMessageRouter 验证 version=1 ✓，capability 含 'runtime.dialog' ✓
- 6. 路由到 system:confirm handler → SystemUIService.confirm('inventory', params)
- 7. SystemUIService 创建 ActiveItem 入栈 → DOM 渲染对话框 → LayerSystem.acquireSystemFocus()
- 8. 用户点"确定" → resolve(true) → handler sendSuccess(plugin, "inventory:42", { ok: true })
- 9. dialogStack 弹出该 item，若栈空 → LayerSystem.releaseSystemFocus()
-10. 子页面 Client 收到 response → 匹配 pendingRequests["inventory:42"] → resolve {ok:true}
-11. ReUISystem.confirm() 返回 true 给插件代码
+ 1. 插件 A：const ok = await system.confirm('删除?', {level:'danger'})
+ 2. ReUISystem.confirm → client.request('exports:invoke',
+       { target:'reui-system', method:'confirm', args:[{message:'删除?',level:'danger'}] })
+ 3. Client 生成 id='A:42' → reui:request 发往 parent
+ 4. MessageDispatcher 验证来源 → PostMessageRouter → ExportRegistry.invoke
+ 5. ExportRegistry 校验 confirm.requirePermissions(['runtime.dialog']) ⊆ A.permissions ✓
+ 6. 重打包 exports:__dispatch（带 callerPluginId='A'）→ reui-system iframe
+ 7. reui-system 入 dialogStack，渲染对话框（framework）→ system-layer:acquireFocus
+ 8. 用户点"删除" → confirm 方法 resolve {ok:true}
+ 9. reui-system 出栈，若栈空 → system-layer:releaseFocus
+10. 响应原路：reui-system → ExportRegistry → PostMessageRouter → A 的 Client（匹配 id='A:42'）
+11. ReUISystem.confirm 返回 true 给插件 A
 ```

@@ -80,9 +80,27 @@ interface PluginManifest {
    */
   devEntry?: string;
 
+  // ─── 插件种类 ───
+  /**
+   * 插件种类（可选，默认普通插件）
+   *   未声明        — 普通插件（hud/panel/overlay）
+   *   "system"     — 系统插件（RFC-006）。专供 ReUI 自带的 `reui-system`：
+   *                  挂载于 System 层、可声明 runtime.systemLayer 特权。
+   *
+   * 约束（见 §4.1）：
+   *   • `kind:"system"` 必须经【受信系统密钥】签名（reui_system_key，见 §4.2.3），普通密钥无效；
+   *   • 仅 `kind:"system"` 时 `layer:"system"` 与 `runtime.systemLayer` 才合法；
+   *   • 一个 Runtime 至多加载一个 `kind:"system"` 插件。
+   */
+  kind?: "system";
+
   // ─── 层级与显示 ───
-  /** 所属显示层级 */
-  layer: "hud" | "panel" | "overlay";
+  /**
+   * 所属显示层级
+   *   普通插件：hud / panel / overlay
+   *   "system"：仅 `kind:"system"` 的系统插件可用（RFC-006 §4.1），普通插件声明即校验失败
+   */
+  layer: "hud" | "panel" | "overlay" | "system";
   /** 显示尺寸/位置配置 */
   display?: {
     width?: string;              // CSS 值，默认 "100%"
@@ -97,11 +115,14 @@ interface PluginManifest {
    * 运行时 API 访问权限列表（AND 逻辑）
    *
    * Runtime 模块权限：
-   *   "runtime.all"        — 所有模块
-   *   "runtime.network"    — HTTP 请求
-   *   "runtime.websocket"  — WebSocket
-   *   "runtime.message"    — 插件间消息 / NUI 消息
-   *   "runtime.dialog"     — 对话框 / Overlay
+   *   "runtime.all"         — 所有模块
+   *   "runtime.network"     — HTTP 请求
+   *   "runtime.websocket"   — WebSocket
+   *   "runtime.message"     — 插件间消息 / NUI 消息
+   *   "runtime.dialog"      — 调用系统对话框 alert/confirm/prompt（RFC-006）
+   *   "runtime.notification"— 调用系统通知 notify/toast/dismiss（RFC-006）
+   *   "runtime.systemLayer" — ★ 特权：System 层挂载 + 焦点仲裁 + 生命周期事件订阅。
+   *                           仅 `kind:"system"` 插件可声明（RFC-006 §4.2）
    *
    * 跨插件访问权限：
    *   "plugins.all"        — 访问任意其他插件
@@ -210,6 +231,22 @@ interface PluginManifest {
   "roleRestriction": ["admin"],
   "permissions": ["runtime.all", "plugins.all"],
   "defaultHotkey": "F10"
+}
+```
+
+#### 3.1.6 系统插件示例（`kind:"system"`，RFC-006）
+
+> 仅 ReUI 自带的 `reui-system` 使用；必须经受信系统密钥签名（见 §4.2.3「受信系统密钥」）。普通插件**不得**声明 `kind:"system"` / `layer:"system"` / `runtime.systemLayer`，否则 Schema 校验失败。
+
+```json
+{
+  "id": "reui-system",
+  "name": "ReUI System UI",
+  "version": "1.0.0",
+  "entry": "dist/index.html",
+  "kind": "system",
+  "layer": "system",
+  "permissions": ["runtime.systemLayer", "exports.expose"]
 }
 ```
 
@@ -588,15 +625,18 @@ async reloadPlugin(pluginId: string): Promise<void> {
 
 ---
 
-### 3.5 Layer System (HUD / Panel / Overlay)
+### 3.5 Layer System (HUD / Panel / Overlay / System)
 
 #### 3.5.1 层级定义
 
-| 层级 | z-index 范围 | 可见性 | 输入行为 | 管理模式 |
-|------|-------------|--------|----------|----------|
-| **HUD** | 100-199 | 始终可见 | `pointer-events: none`（鼠标穿透） | 独立并存 |
-| **Panel** | 200-299 | 按需切换 | `SetNuiFocusInput(true)`（拦截键鼠） | **互斥** |
-| **Overlay** | 300-399 | 栈式弹出 | 遮罩阻止下层交互 | **栈式管理** |
+| 层级 | z-index 范围 | 可见性 | 输入行为 | 管理模式 | 来源 |
+|------|-------------|--------|----------|----------|------|
+| **HUD** | 100-199 | 始终可见 | `pointer-events: none`（鼠标穿透） | 独立并存 | 普通插件 iframe |
+| **Panel** | 200-299 | 按需切换 | `SetNuiFocusInput(true)`（拦截键鼠） | **互斥** | 普通插件 iframe |
+| **Overlay** | 300-399 | 栈式弹出 | 遮罩阻止下层交互 | **栈式管理** | 普通插件 iframe |
+| **System** | **400-499** | **常驻全屏** | 默认 `pointer-events:none`；对话框期间由系统插件请求焦点仲裁 | 由系统插件自管 | **仅 `kind:"system"` 插件 iframe（RFC-006）** |
+
+> **System 层不向普通插件开放**：`attachToLayer` 仅在加载 `kind:"system"` 插件时接受 `'system'`；普通插件的 `layer:"system"` 在 Schema 层（§4.1）即被拒绝。焦点仲裁（`acquireSystemFocus/releaseSystemFocus`）与 System 层细节见 RFC-006 §4.2。
 
 #### 3.5.2 LayerSystem API
 
@@ -872,6 +912,9 @@ const PermissionString = z.string().regex(
   'Permission must be dot-separated lowercase with optional .* suffix'
 );
 
+// 仅系统插件可声明的特权 capability
+const PRIVILEGED_PERMISSIONS = ['runtime.systemLayer'];
+
 export const PluginManifestSchema = z.object({
   id: z.string().min(1).max(64).regex(/^[a-z][a-z0-9-]*$/),
   name: z.string().min(1).max(128),
@@ -884,7 +927,8 @@ export const PluginManifestSchema = z.object({
     (v) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])/.test(v),
     'devEntry must point to localhost'
   ).optional(),
-  layer: z.enum(['hud', 'panel', 'overlay']),
+  kind: z.literal('system').optional(),                 // 未声明 = 普通插件
+  layer: z.enum(['hud', 'panel', 'overlay', 'system']),
   display: z.object({
     width: z.string().optional(),
     height: z.string().optional(),
@@ -896,14 +940,32 @@ export const PluginManifestSchema = z.object({
   roleRestriction: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   defaultHotkey: z.string().max(32).optional(),
-});
+})
+  // ── 系统插件交叉约束（RFC-006）：layer/特权权限 仅 kind:'system' 合法 ──
+  .superRefine((m, ctx) => {
+    const isSystem = m.kind === 'system';
+    if (m.layer === 'system' && !isSystem) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['layer'],
+        message: `layer:"system" requires kind:"system"` });
+    }
+    const privileged = (m.permissions ?? []).filter((p) => PRIVILEGED_PERMISSIONS.includes(p));
+    if (privileged.length && !isSystem) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['permissions'],
+        message: `privileged permissions [${privileged.join(', ')}] require kind:"system"` });
+    }
+    if (isSystem && m.layer !== 'system') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['layer'],
+        message: `kind:"system" must use layer:"system"` });
+    }
+  });
 
-// 安全字段子集（用于签名）
+// 安全字段子集（用于签名）—— kind 纳入签名，防止普通插件被篡改成系统插件
 export const SecuredFieldsSchema = z.object({
   id: z.string(),
   version: z.string(),
   entry: z.string(),
-  layer: z.enum(['hud', 'panel', 'overlay']),
+  kind: z.literal('system').optional(),
+  layer: z.enum(['hud', 'panel', 'overlay', 'system']),
   permissions: z.array(z.string()),
   roleRestriction: z.array(z.string()),
   enabled: z.boolean(),
@@ -915,6 +977,7 @@ export function extractSecuredFields(manifest: PluginManifest): SecuredFields {
     id: manifest.id,
     version: manifest.version,
     entry: manifest.entry,
+    kind: manifest.kind,
     layer: manifest.layer,
     permissions: (manifest.permissions ?? []).sort(),
     roleRestriction: (manifest.roleRestriction ?? []).sort(),
@@ -928,6 +991,7 @@ export function normalizeForSigning(secured: SecuredFields): SecuredFields {
     id: secured.id,
     version: secured.version,
     entry: secured.entry,
+    kind: secured.kind,
     layer: secured.layer,
     permissions: [...secured.permissions].sort(),
     roleRestriction: [...secured.roleRestriction].sort(),
@@ -935,6 +999,8 @@ export function normalizeForSigning(secured: SecuredFields): SecuredFields {
   };
 }
 ```
+
+> **注意：** `kind` 被纳入 `SecuredFields`，因此任何对 `kind`/`layer`/`permissions` 的篡改都会破坏签名；再叠加 §4.2.3 的"受信系统密钥"要求，普通插件无法通过自行添加 `kind:"system"` 提权。
 
 **校验能力：**
 - 类型检查（string / number / array / boolean）
@@ -955,8 +1021,9 @@ export function normalizeForSigning(secured: SecuredFields): SecuredFields {
 | `id` | ✅ | 防止冒充其他插件 |
 | `version` | ✅ | 防止版本回退攻击 |
 | `entry` | ✅ | 防止替换为恶意 HTML |
-| `layer` | ✅ | 防止 HUD 伪装为 Overlay 获取模态控制 |
-| `permissions` | ✅ | 防止自行添加高权限 |
+| `kind` | ✅ | 防止普通插件篡改为 `kind:"system"` 提权（RFC-006） |
+| `layer` | ✅ | 防止 HUD 伪装为 Overlay 获取模态控制；防止冒用 System 层 |
+| `permissions` | ✅ | 防止自行添加高权限（含 `runtime.systemLayer`） |
 | `roleRestriction` | ✅ | 防止清空角色限制 |
 | `enabled` | ✅ | 防止启用未授权插件 |
 | `name` | ❌ | 仅显示用途 |
@@ -1016,7 +1083,38 @@ export function verifyManifest(manifest: PluginManifest, secretKey: string): boo
 # server.cfg
 set reui_sign_key "your-secret-signing-key-here"
 set reui_mode "production"
+
+# 受信系统密钥（仅用于 kind:"system" 插件，与普通密钥分离）
+set reui_system_key "separate-privileged-system-key"
 ```
+
+##### 受信系统密钥（`reui_system_key`，RFC-006）
+
+`kind:"system"` 插件代表 Runtime 的特权身份（独占 System 层、可仲裁全局焦点），因此**不能**与普通业务插件共用签名密钥。引入**独立的受信系统密钥** `reui_system_key`：
+
+- **签名**：`reui sign` 对 `kind:"system"` 的插件改用 `REUI_SYSTEM_KEY`（而非 `REUI_SIGN_KEY`）计算 `_lock`（RFC-005 据 `kind` 自动选择密钥）。
+- **验签（服务端，按 `kind` 选密钥）：**
+
+  ```lua
+  -- server.lua（片段）：按 kind 选择验签密钥
+  local signKey   = GetConvar('reui_sign_key', '')
+  local systemKey = GetConvar('reui_system_key', '')
+
+  local function verifyByKind(manifest)
+    if manifest.kind == 'system' then
+      -- 系统插件：必须用受信系统密钥验签；未配置该密钥则一律拒绝
+      if systemKey == '' then return false end
+      return verifySignature(manifest, systemKey)
+    end
+    return verifySignature(manifest, signKey)
+  end
+  ```
+
+- **加载约束（Runtime / PluginManager）：**
+  - 普通插件即便伪造 `kind:"system"`，因 `kind` 已纳入签名且普通密钥 ≠ 系统密钥，验签必然失败；
+  - 一个 Runtime 实例**至多加载一个** `kind:"system"` 插件，重复出现时仅保留第一个并对其余记 `SYSTEM_ALREADY_REGISTERED` 警告；
+  - 只有成功加载的系统插件才被授予 `runtime.systemLayer` 对应的特权 method 与 System 层挂载（RFC-006 §4.2）。
+- **密钥不接触客户端**：`reui_system_key` 与 `reui_sign_key` 同样仅服务端可读，客户端 / CEF 永不接触。
 
 #### 4.2.4 签名后的 plugin.json
 

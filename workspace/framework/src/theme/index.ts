@@ -4,3 +4,6 @@
 
 export * from './tokens';
 export * from './theme-utils';
+export * from './antd-theme';
+export * from './default';
+export { ReUIProvider } from './ReUIProvider';

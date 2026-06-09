@@ -1,0 +1,78 @@
+/**
+ * SCSS Mixins（RFC-004 §4.1）。
+ *
+ * 提升自研组件 DX，构建时编译为普通 CSS。
+ */
+
+@use "sass:map";
+@use "variables" as *;
+
+// ============================================================================
+// Transition
+// ============================================================================
+
+@mixin reui-transition($props...) {
+  transition-property: $props;
+  transition-duration: var(--reui-animation-fast, $reui-animation-fast);
+  transition-timing-function: var(--reui-animation-easing, $reui-animation-easing);
+}
+
+// ============================================================================
+// Scrollbar（overlay 模式，不占宽度）
+// ============================================================================
+
+@mixin reui-scrollbar {
+  &::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--reui-color-border, $reui-color-border);
+    border-radius: var(--reui-radius-full, $reui-radius-full);
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background: var(--reui-color-border-hover, $reui-color-border-hover);
+  }
+}
+
+// ============================================================================
+// Focus Ring
+// ============================================================================
+
+@mixin reui-focus-ring {
+  &:focus-visible {
+    outline: 2px solid var(--reui-color-accent, $reui-color-accent);
+    outline-offset: 2px;
+  }
+
+  // 鼠标交互时不显示焦点环
+  &:focus:not(:focus-visible) {
+    outline: none;
+  }
+}
+
+// ============================================================================
+// Glass Morphism（吸收旧 Glass 效果，参数化）
+// ============================================================================
+
+@mixin reui-glass($blur: 12, $opacity: 0.85) {
+  background: rgba(15, 15, 20, $opacity);
+  backdrop-filter: blur(#{$blur}px);
+  -webkit-backdrop-filter: blur(#{$blur}px);
+  border: 1px solid var(--reui-color-border, $reui-color-border);
+}
+
+// ============================================================================
+// GPU 加速（仅 transform + opacity）
+// ============================================================================
+
+@mixin reui-gpu-accelerated {
+  transform: translateZ(0);
+  will-change: transform, opacity;
+}

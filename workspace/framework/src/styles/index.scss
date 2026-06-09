@@ -1,0 +1,14 @@
+/**
+ * 样式入口（RFC-004 §4）。
+ *
+ * 消费方通过 `import '@reui/framework/style.css'` 引入。
+ * Vite 构建时会将此文件编译为 CSS 并写入 `dist/style.css`。
+ */
+
+@use "variables" as *;
+@use "mixins" as *;
+
+@forward "variables";
+@forward "mixins";
+
+@use "global";

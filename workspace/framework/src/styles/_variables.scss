@@ -1,0 +1,79 @@
+/**
+ * SCSS 变量（RFC-004 §4.1）。
+ *
+ * 作为 fallback 与开发参考，运行时使用 CSS Custom Properties。
+ * 去掉旧库硬编码颜色/尺寸（#2469f0 / #1e1e1e / 90vw / borderRadius:12 等），
+ * 统一走 token。
+ */
+
+// ============================================================================
+// Colors（与 DesignTokens 一一对应，作为 fallback）
+// ============================================================================
+
+$reui-color-bg-primary: rgba(15, 15, 20, 0.95) !default;
+$reui-color-bg-secondary: rgba(25, 25, 35, 0.90) !default;
+$reui-color-bg-tertiary: rgba(35, 35, 50, 0.85) !default;
+$reui-color-bg-hover: rgba(255, 255, 255, 0.05) !default;
+$reui-color-bg-active: rgba(255, 255, 255, 0.08) !default;
+
+$reui-color-text-primary: rgba(255, 255, 255, 0.95) !default;
+$reui-color-text-secondary: rgba(255, 255, 255, 0.65) !default;
+$reui-color-text-muted: rgba(255, 255, 255, 0.40) !default;
+
+$reui-color-accent: #4F9EF8 !default;
+$reui-color-accent-hover: #6BB0FF !default;
+$reui-color-success: #4ADE80 !default;
+$reui-color-warning: #FBBF24 !default;
+$reui-color-danger: #F87171 !default;
+$reui-color-info: #60A5FA !default;
+
+$reui-color-border: rgba(255, 255, 255, 0.10) !default;
+$reui-color-border-hover: rgba(255, 255, 255, 0.20) !default;
+
+// ============================================================================
+// Spacing
+// ============================================================================
+
+$reui-spacing-xs: 4px !default;
+$reui-spacing-sm: 8px !default;
+$reui-spacing-md: 12px !default;
+$reui-spacing-lg: 16px !default;
+$reui-spacing-xl: 24px !default;
+$reui-spacing-xxl: 32px !default;
+
+// ============================================================================
+// Radius
+// ============================================================================
+
+$reui-radius-sm: 4px !default;
+$reui-radius-md: 8px !default;
+$reui-radius-lg: 12px !default;
+$reui-radius-full: 9999px !default;
+
+// ============================================================================
+// Font Size
+// ============================================================================
+
+$reui-font-size-xs: 11px !default;
+$reui-font-size-sm: 12px !default;
+$reui-font-size-md: 14px !default;
+$reui-font-size-lg: 16px !default;
+$reui-font-size-xl: 20px !default;
+$reui-font-size-xxl: 24px !default;
+
+// ============================================================================
+// Animation
+// ============================================================================
+
+$reui-animation-fast: 150ms !default;
+$reui-animation-normal: 250ms !default;
+$reui-animation-slow: 400ms !default;
+$reui-animation-easing: cubic-bezier(0.4, 0, 0.2, 1) !default;
+
+// ============================================================================
+// Shadow
+// ============================================================================
+
+$reui-shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3) !default;
+$reui-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4) !default;
+$reui-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5) !default;

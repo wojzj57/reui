@@ -1,0 +1,49 @@
+import { Meta } from '@storybook/blocks';
+
+<Meta title="ReUI Framework Gallery/Introduction" />
+
+# @reui/framework Gallery
+
+本地 Storybook 开发环境，用于预览 `@reui/framework` 所有组件样式、Props API 与使用示例。
+
+## 组件索引
+
+### Form 表单
+- [Input](?path=/story/form-input--default) — 输入框，含行内编辑模式
+- [Select](?path=/story/form-select--default) — 下拉选择，支持多选
+- [Checkbox](?path=/story/form-checkbox--default) — 复选框
+- [Radio](?path=/story/form-radio--default) — 单选框
+- [Slider](?path=/story/form-slider--default) — 滑块，支持居中双色
+- [NumberInput](?path=/story/form-numberinput--default) — 数字输入
+
+### Data Display 数据展示
+- [ProgressBar](?path=/story/data-display-progressbar--default) — 进度条
+- [Loading](?path=/story/data-display-loading--default) — 加载指示器
+- [List](?path=/story/data-display-list--default) — 列表，支持虚拟滚动
+- [StatBar](?path=/story/layout-statbar--default) — 状态条（玩家属性）
+
+### Feedback 反馈
+- [Toast](?path=/story/feedback-toast--default) — 轻提示（命令式）
+- [Dialog](?path=/story/feedback-dialog--default) — 对话框（命令式）
+
+### Layout 布局
+- [Panel](?path=/story/layout-panel--default) — 面板，支持拖拽/缩放/玻璃拟态
+- [Stack](?path=/story/layout-stack--default) — 堆叠布局
+
+### Overlay 浮层
+- [ContextMenu](?path=/story/overlay-contextmenu--default) — 右键菜单
+
+### FiveM 专用（计划中）
+- Numpad — 数字键盘（待实现）
+- CircleInput — 圆形输入（待实现）
+
+---
+
+## 使用说明
+
+```bash
+# 从项目根目录运行
+pnpm -F @reui/framework-storybook storybook
+```
+
+修改 `workspace/framework/src/` 源码后，Storybook 会自动热更新。

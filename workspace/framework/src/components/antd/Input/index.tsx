@@ -78,4 +78,3 @@ export function Input(props: InputProps) {
 Input.TextArea = AntInput.TextArea;
 Input.Password = AntInput.Password;
 Input.Search = AntInput.Search;
-Input.Group = AntInput.Group;

@@ -34,6 +34,7 @@ RFC-001 通讯协议与核心通讯层
 | Phase 3.7 | [RFC-006](./rfc-006-runtime-system-ui.md) | 系统 UI 插件（reui-system） | `kind:"system"` 特权插件、`@expose` 的 notify/toast/dialog、`@reui/core/system` 薄包装、Lua 接口；UI 留待 RFC-004 | RFC-001, RFC-002, RFC-003, **RFC-007** |
 | Phase 4 | [RFC-004](./rfc-004-framework-ui-library.md) | Framework UI 组件库 | React 组件库、主题系统、Hooks、游戏专用组件 | RFC-001, RFC-003 |
 | Phase 5 | [RFC-005](./rfc-005-cli-and-developer-experience.md) | CLI 工具链与开发体验 | CLI 命令、Vite 插件、热重载、开发模式 | RFC-002 |
+| Phase 6 | [RFC-009](./rfc-009-fivem-entrance.md) | fivem-entrance 宿主资源 | `@reui/fivem-entrance` 包、NUI 宿主页面、fxmanifest、client/server Lua、可部署资源 | RFC-001, RFC-002, RFC-003, RFC-005 |
 
 ## 并行开发策略
 

@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "noEmit": true,
+    "types": ["vite/client"],
+    "paths": {
+      "@reui/runtime": ["../runtime/src/index.ts"],
+      "@reui/interface": ["../interface/src/index.ts"],
+      "@reui/interface/*": ["../interface/src/*"],
+      "@reui/cli": ["../cli/src/index.ts"]
+    }
+  },
+  "include": ["web/**/*.ts", "vite.config.ts"]
+}

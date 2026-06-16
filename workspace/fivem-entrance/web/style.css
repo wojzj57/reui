@@ -1,0 +1,19 @@
+/* ReUI Runtime host 基础样式。
+ *
+ * 背景必须透明，让游戏画面透出；宿主页面全屏、禁止滚动。
+ * 各 Layer 容器由 LayerSystem 以 position:fixed;inset:0 注入到 #reui-root。
+ */
+
+html,
+body {
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+}
+
+#reui-root {
+  position: fixed;
+  inset: 0;
+}
